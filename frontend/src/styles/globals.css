@@ -77,7 +77,7 @@
   }
   
   .agent-status-working {
-    @apply bg-accent-light dark:bg-accent-light-dark text-accent animate-pulse-slow;
+    @apply bg-accent-light dark:bg-accent-light-dark text-accent;
   }
   
   .agent-status-success {

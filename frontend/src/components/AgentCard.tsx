@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import { cn } from '../utils/cn';
-import type { Agent } from '@types/index';
+import type { Agent } from '../types';
 
 interface AgentCardProps {
   agent: Agent;
@@ -10,7 +10,7 @@ interface AgentCardProps {
 
 const statusConfig = {
   idle: { label: 'Idle', class: 'agent-status-idle', animation: '' },
-  working: { label: 'Working', class: 'agent-status-working', animation: 'animate-pulse' },
+  working: { label: 'Working', class: 'agent-status-working', animation: '' },
   success: { label: 'Success', class: 'agent-status-success', animation: '' },
   error: { label: 'Error', class: 'agent-status-error', animation: '' },
   offline: { label: 'Offline', class: 'agent-status-offline', animation: '' },

@@ -1,43 +1,48 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import type { WebSocketMessage } from '@types/index';
+import type { WebSocketMessage } from '../types';
+import { useAppStore } from '../stores/appStore';
 
 export function useWebSocket() {
   const [connected, setConnected] = useState(false);
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
   const ws = useRef<WebSocket | null>(null);
-  const reconnectTimeout = useRef<NodeJS.Timeout>();
+  const reconnectTimeout = useRef<number>();
+
+  const setAgentStatus = useAppStore((state) => state.setAgentStatus);
+  const upsertTask = useAppStore((state) => state.upsertTask);
 
   const connect = useCallback(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
-    
-    ws.current = new WebSocket(wsUrl);
+    ws.current = new WebSocket('ws://localhost:3001/ws');
 
     ws.current.onopen = () => {
       setConnected(true);
-      console.log('WebSocket connected');
     };
 
     ws.current.onmessage = (event) => {
-      const message: WebSocketMessage = JSON.parse(event.data);
+      const message = JSON.parse(event.data) as WebSocketMessage;
       setLastMessage(message);
+
+      if (message.type === 'agent:status') {
+        setAgentStatus(message.payload.agentId, message.payload.status);
+      }
+
+      if (message.type === 'task:update' || message.type === 'task:created') {
+        upsertTask(message.payload);
+      }
     };
 
     ws.current.onclose = () => {
       setConnected(false);
-      console.log('WebSocket disconnected, retrying...');
-      reconnectTimeout.current = setTimeout(connect, 3000);
+      reconnectTimeout.current = window.setTimeout(connect, 3000);
     };
-
-    ws.current.onerror = (error) => {
-      console.error('WebSocket error:', error);
-    };
-  }, []);
+  }, [setAgentStatus, upsertTask]);
 
   useEffect(() => {
     connect();
     return () => {
-      if (reconnectTimeout.current) clearTimeout(reconnectTimeout.current);
+      if (reconnectTimeout.current) {
+        window.clearTimeout(reconnectTimeout.current);
+      }
       ws.current?.close();
     };
   }, [connect]);
