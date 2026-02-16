@@ -11,7 +11,10 @@ import { useAppStore } from '../stores/appStore';
 export function Dashboard() {
   const navigate = useNavigate();
   const { connected } = useWebSocket();
-  const { agents, tasks, projects, setAgents, setTasks, setProjects, addTask, addProject } = useAppStore();
+  const { agents, tasks, projects, addTask, addProject } = useAppStore();
+  const setAgents = useAppStore.getState().setAgents;
+  const setTasks = useAppStore.getState().setTasks;
+  const setProjects = useAppStore.getState().setProjects;
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({ activeAgents: 0, pendingTasks: 0, runningTasks: 0, completedToday: 0 });
@@ -37,7 +40,8 @@ export function Dashboard() {
     };
 
     load();
-  }, [setAgents, setProjects, setTasks]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const recentTasks = useMemo(() => tasks.slice(0, 5), [tasks]);
 

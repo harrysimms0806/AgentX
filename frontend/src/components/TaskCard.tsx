@@ -1,4 +1,4 @@
-import type { Task } from '../types';
+import type { Task } from '../types/index.js';
 import { cn } from '../utils/cn';
 
 interface TaskCardProps {

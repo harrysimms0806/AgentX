@@ -1,4 +1,4 @@
-import type { Agent, Project, Task } from '../types';
+import type { Agent, Project, Task } from '../types/index.js';
 
 interface ApiResponse<T> {
   success: boolean;

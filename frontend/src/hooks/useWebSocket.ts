@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import type { WebSocketMessage } from '../types';
+import type { WebSocketMessage } from '../types/index.js';
 import { useAppStore } from '../stores/appStore';
 
 export function useWebSocket() {
@@ -7,9 +7,10 @@ export function useWebSocket() {
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
   const ws = useRef<WebSocket | null>(null);
   const reconnectTimeout = useRef<number>();
-
-  const setAgentStatus = useAppStore((state) => state.setAgentStatus);
-  const upsertTask = useAppStore((state) => state.upsertTask);
+  
+  // Get store actions once, stable reference
+  const setAgentStatus = useAppStore.getState().setAgentStatus;
+  const upsertTask = useAppStore.getState().upsertTask;
 
   const connect = useCallback(() => {
     ws.current = new WebSocket('ws://localhost:3001/ws');
@@ -35,7 +36,11 @@ export function useWebSocket() {
       setConnected(false);
       reconnectTimeout.current = window.setTimeout(connect, 3000);
     };
-  }, [setAgentStatus, upsertTask]);
+    
+    ws.current.onerror = () => {
+      // Let onclose handle reconnection
+    };
+  }, []); // ← No dependencies = stable forever
 
   useEffect(() => {
     connect();

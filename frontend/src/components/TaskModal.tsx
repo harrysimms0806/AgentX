@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import type { Agent, Project, Task } from '../types';
+import type { Agent, Project, Task } from '../types/index.js';
 
 interface TaskModalProps {
   open: boolean;
