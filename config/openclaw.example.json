@@ -1,0 +1,176 @@
+{
+  "version": "1.0.0",
+  "defaultAgent": "bud",
+  "fallbackBehavior": "queue",
+  
+  "providers": [
+    {
+      "id": "openai",
+      "type": "cloud",
+      "endpoint": "https://api.openai.com"
+    },
+    {
+      "id": "ollama",
+      "type": "local",
+      "endpoint": "http://localhost:11434"
+    }
+  ],
+  
+  "models": [
+    {
+      "id": "gpt-5.3-codex",
+      "provider": "openai",
+      "type": "cloudCoder",
+      "maxTokens": 128000
+    },
+    {
+      "id": "qwen2.5-coder:14b",
+      "provider": "ollama",
+      "type": "localCoder",
+      "maxTokens": 32768
+    }
+  ],
+  
+  "agents": [
+    {
+      "id": "bud",
+      "name": "Bud",
+      "type": "coordinator",
+      "provider": "openclaw",
+      "capabilities": ["planning", "coordination", "documentation", "review"],
+      "avatar": {
+        "emoji": "🌱"
+      },
+      "permissions": {
+        "read": true,
+        "write": false,
+        "exec": false,
+        "admin": false,
+        "scopes": {
+          "folders": ["/Users/bud/BUD BOT/projects"],
+          "repos": ["jb-rubber", "surveyx", "agentx"]
+        }
+      }
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "type": "builder",
+      "provider": "openai",
+      "model": "gpt-5.3-codex",
+      "capabilities": ["code-generation", "refactoring", "debugging", "architecture"],
+      "avatar": {
+        "emoji": "🤖"
+      },
+      "permissions": {
+        "read": true,
+        "write": true,
+        "exec": false,
+        "admin": false,
+        "requiresApproval": ["write"],
+        "scopes": {
+          "folders": ["/Users/bud/BUD BOT/projects"],
+          "repos": ["jb-rubber", "surveyx", "agentx"]
+        },
+        "budgets": {
+          "dailyCost": 50.0,
+          "monthlyCost": 500.0,
+          "maxConcurrent": 2
+        }
+      }
+    },
+    {
+      "id": "local",
+      "name": "Local",
+      "type": "local",
+      "provider": "ollama",
+      "model": "qwen2.5-coder:14b",
+      "capabilities": ["quick-edits", "css", "simple-fixes"],
+      "avatar": {
+        "emoji": "💻"
+      },
+      "permissions": {
+        "read": true,
+        "write": true,
+        "exec": false,
+        "admin": false,
+        "scopes": {
+          "folders": ["/Users/bud/BUD BOT/projects"],
+          "repos": []
+        },
+        "budgets": {
+          "maxConcurrent": 1
+        }
+      }
+    }
+  ],
+  
+  "tools": [
+    {
+      "id": "filesystem",
+      "name": "File System",
+      "type": "filesystem",
+      "provider": "local",
+      "enabled": true,
+      "capabilities": ["read", "write"],
+      "config": {
+        "basePath": "/Users/bud/BUD BOT",
+        "allowOutsideBase": false
+      }
+    },
+    {
+      "id": "git",
+      "name": "Git",
+      "type": "git",
+      "provider": "local",
+      "enabled": true,
+      "capabilities": ["read", "write", "exec"],
+      "config": {}
+    },
+    {
+      "id": "shell",
+      "name": "Shell",
+      "type": "shell",
+      "provider": "local",
+      "enabled": true,
+      "capabilities": ["read", "exec"],
+      "requiresApproval": ["exec"],
+      "config": {
+        "allowedCommands": ["git", "npm", "node", "ls", "cat", "pwd"],
+        "blockedCommands": ["rm -rf", "sudo", "chmod", "chown"]
+      }
+    },
+    {
+      "id": "trello",
+      "name": "Trello",
+      "type": "api",
+      "provider": "trello",
+      "enabled": true,
+      "capabilities": ["read", "write"],
+      "config": {
+        "apiKey": "${TRELLO_API_KEY}",
+        "token": "${TRELLO_TOKEN}"
+      }
+    },
+    {
+      "id": "openai-api",
+      "name": "OpenAI API",
+      "type": "api",
+      "provider": "openai",
+      "enabled": true,
+      "capabilities": ["read", "write"],
+      "config": {
+        "apiKey": "${OPENAI_API_KEY}",
+        "organization": "${OPENAI_ORG}"
+      }
+    }
+  ],
+  
+  "policy": {
+    "defaultDeny": true,
+    "requireApprovalFor": ["exec", "admin"],
+    "auditAllActions": true,
+    "maxRequestSize": 10485760,
+    "requestTimeout": 120000
+  }
+}

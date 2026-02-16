@@ -1,0 +1,35 @@
+{
+  "name": "agentx",
+  "version": "1.0.0",
+  "description": "Universal AI Agent Management Platform",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "client": "cd frontend && npm run dev",
+    "server": "cd backend && npm run dev",
+    "build": "cd frontend && npm run build",
+    "setup": "npm install && cd frontend && npm install && cd ../backend && npm install",
+    "db:init": "node backend/scripts/init-db.js",
+    "db:migrate": "node backend/scripts/migrate.js",
+    "agent:codex": "node agents/codex/cli.js",
+    "test": "vitest",
+    "electron": "electron electron-main.cjs",
+    "electron:build": "npm run build && electron-builder",
+    "electron:dev": "NODE_ENV=development electron electron-main.cjs",
+    "electron:pack": "electron-builder --dir",
+    "electron:dist": "electron-builder"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "electron": "^40.4.1",
+    "vitest": "^1.2.0"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "automation",
+    "dashboard"
+  ],
+  "author": "Harry + Bud",
+  "license": "PRIVATE"
+}
