@@ -3,6 +3,7 @@ import cors from 'cors';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import path from 'path';
+import db from './models/database.js';
 import { fileURLToPath } from 'url';
 import { initDatabase } from './models/database.js';
 
@@ -139,6 +140,24 @@ app.use('/api/audit', auditRoutes);
 // NEW: Enhanced security routes
 app.use('/api/simulate', simulateRoutes);
 app.use('/api/rbac', rbacRoutes);
+
+
+app.get('/api/stats', (req, res) => {
+  const activeAgents = db.prepare(`SELECT COUNT(*) as count FROM agents WHERE status IN ('idle', 'working', 'success')`).get().count;
+  const pendingTasks = db.prepare(`SELECT COUNT(*) as count FROM tasks WHERE status IN ('pending', 'queued')`).get().count;
+  const runningTasks = db.prepare(`SELECT COUNT(*) as count FROM tasks WHERE status = 'running'`).get().count;
+  const completedToday = db.prepare(`SELECT COUNT(*) as count FROM tasks WHERE status = 'completed' AND date(completed_at) = date('now')`).get().count;
+
+  res.json({
+    success: true,
+    data: {
+      activeAgents,
+      pendingTasks,
+      runningTasks,
+      completedToday,
+    },
+  });
+});
 
 // Main health check
 app.get('/api/health', (req, res) => {

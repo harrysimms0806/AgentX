@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
+import fs from 'fs';
 import db from '../models/database.js';
 import { broadcast } from '../server.js';
 
@@ -27,6 +28,13 @@ router.post('/', (req, res) => {
     return res.status(400).json({ 
       success: false, 
       error: { code: 'MISSING_FIELDS', message: 'projectId, agentId, taskId, and folderPath are required' } 
+    });
+  }
+
+  if (!fs.existsSync(folderPath)) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'INVALID_FOLDER', message: 'Folder path does not exist' }
     });
   }
 
