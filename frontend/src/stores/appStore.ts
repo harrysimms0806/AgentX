@@ -1,49 +1,39 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Agent, Task, Project, WorkspaceLock, UserPreferences, Integration } from '@types/index';
+import type { Agent, Task, Project, WorkspaceLock, Integration } from '../types';
 
 interface AppState {
-  // UI State
   sidebarCollapsed: boolean;
   theme: 'light' | 'dark' | 'system';
-  activeProject: string | null;
-  
-  // Data
+  activeProject: Project | null;
+
   agents: Agent[];
   tasks: Task[];
   projects: Project[];
   locks: WorkspaceLock[];
   integrations: Integration[];
-  
-  // Actions
+
   toggleSidebar: () => void;
   setTheme: (theme: 'light' | 'dark' | 'system') => void;
-  setActiveProject: (projectId: string | null) => void;
-  
-  // Agent Actions
+  setActiveProject: (project: Project | null) => void;
+
+  setAgents: (agents: Agent[]) => void;
+  setTasks: (tasks: Task[]) => void;
+  setProjects: (projects: Project[]) => void;
+
   setAgentStatus: (agentId: string, status: Agent['status']) => void;
-  updateAgentStats: (agentId: string, stats: Partial<Agent['stats']>) => void;
-  
-  // Task Actions
+  upsertTask: (task: Task) => void;
+
   addTask: (task: Task) => void;
   updateTask: (taskId: string, updates: Partial<Task>) => void;
   removeTask: (taskId: string) => void;
-  
-  // Project Actions
+
   addProject: (project: Project) => void;
-  updateProject: (projectId: string, updates: Partial<Project>) => void;
-  removeProject: (projectId: string) => void;
-  
-  // Lock Actions
-  addLock: (lock: WorkspaceLock) => void;
-  removeLock: (lockId: string) => void;
-  getActiveLock: (projectId: string) => WorkspaceLock | undefined;
 }
 
 export const useAppStore = create<AppState>()(
   persist(
-    (set, get) => ({
-      // Initial State
+    (set) => ({
       sidebarCollapsed: false,
       theme: 'system',
       activeProject: null,
@@ -52,60 +42,38 @@ export const useAppStore = create<AppState>()(
       projects: [],
       locks: [],
       integrations: [],
-      
-      // UI Actions
+
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setTheme: (theme) => set({ theme }),
-      setActiveProject: (projectId) => set({ activeProject: projectId }),
-      
-      // Agent Actions
+      setActiveProject: (project) => set({ activeProject: project }),
+
+      setAgents: (agents) => set({ agents }),
+      setTasks: (tasks) => set({ tasks }),
+      setProjects: (projects) => set({ projects }),
+
       setAgentStatus: (agentId, status) =>
         set((state) => ({
-          agents: state.agents.map((a) =>
-            a.id === agentId ? { ...a, status } : a
-          ),
+          agents: state.agents.map((a) => (a.id === agentId ? { ...a, status } : a)),
         })),
-      updateAgentStats: (agentId, stats) =>
-        set((state) => ({
-          agents: state.agents.map((a) =>
-            a.id === agentId ? { ...a, stats: { ...a.stats, ...stats } } : a
-          ),
-        })),
-      
-      // Task Actions
-      addTask: (task) => set((state) => ({ tasks: [...state.tasks, task] })),
+
+      upsertTask: (task) =>
+        set((state) => {
+          const exists = state.tasks.some((current) => current.id === task.id);
+          return {
+            tasks: exists
+              ? state.tasks.map((current) => (current.id === task.id ? { ...current, ...task } : current))
+              : [task, ...state.tasks],
+          };
+        }),
+
+      addTask: (task) => set((state) => ({ tasks: [task, ...state.tasks] })),
       updateTask: (taskId, updates) =>
         set((state) => ({
-          tasks: state.tasks.map((t) =>
-            t.id === taskId ? { ...t, ...updates } : t
-          ),
+          tasks: state.tasks.map((task) => (task.id === taskId ? { ...task, ...updates } : task)),
         })),
-      removeTask: (taskId) =>
-        set((state) => ({
-          tasks: state.tasks.filter((t) => t.id !== taskId),
-        })),
-      
-      // Project Actions
-      addProject: (project) => set((state) => ({ projects: [...state.projects, project] })),
-      updateProject: (projectId, updates) =>
-        set((state) => ({
-          projects: state.projects.map((p) =>
-            p.id === projectId ? { ...p, ...updates } : p
-          ),
-        })),
-      removeProject: (projectId) =>
-        set((state) => ({
-          projects: state.projects.filter((p) => p.id !== projectId),
-        })),
-      
-      // Lock Actions
-      addLock: (lock) => set((state) => ({ locks: [...state.locks, lock] })),
-      removeLock: (lockId) =>
-        set((state) => ({
-          locks: state.locks.filter((l) => l.id !== lockId),
-        })),
-      getActiveLock: (projectId) =>
-        get().locks.find((l) => l.projectId === projectId),
+      removeTask: (taskId) => set((state) => ({ tasks: state.tasks.filter((task) => task.id !== taskId) })),
+
+      addProject: (project) => set((state) => ({ projects: [project, ...state.projects] })),
     }),
     {
       name: 'agentx-storage',
@@ -113,7 +81,6 @@ export const useAppStore = create<AppState>()(
         sidebarCollapsed: state.sidebarCollapsed,
         theme: state.theme,
         activeProject: state.activeProject,
-        projects: state.projects,
       }),
     }
   )

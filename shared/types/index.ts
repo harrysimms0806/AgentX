@@ -211,6 +211,7 @@ export interface ApiResponse<T> {
 export type WebSocketMessage =
   | { type: 'agent:status'; payload: { agentId: string; status: Agent['status'] } }
   | { type: 'task:update'; payload: Task }
+  | { type: 'task:created'; payload: Task }
   | { type: 'task:log'; payload: { taskId: string; log: TaskLog } }
   | { type: 'workspace:lock'; payload: WorkspaceLock }
   | { type: 'workspace:unlock'; payload: { lockId: string } }

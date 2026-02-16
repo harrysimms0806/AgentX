@@ -1,26 +1,49 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Navigate, Route, Routes } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './pages/Dashboard';
+import { Agents } from './pages/Agents';
+import { Tasks } from './pages/Tasks';
+import { Workflows } from './pages/Workflows';
+import { Projects } from './pages/Projects';
+import { useAppStore } from './stores/appStore';
+
+function PlaceholderPage({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="p-6">
+      <h1 className="text-2xl font-bold">{title}</h1>
+      <p className="mt-2 text-foreground-secondary">{description}</p>
+    </div>
+  );
+}
+
+function AppLayout() {
+  const sidebarCollapsed = useAppStore((state) => state.sidebarCollapsed);
+
+  return (
+    <div className="min-h-screen bg-background dark:bg-background-dark text-foreground dark:text-foreground-dark transition-colors duration-300">
+      <Sidebar />
+      <main className="min-h-screen transition-all duration-300" style={{ marginLeft: sidebarCollapsed ? 72 : 240 }}>
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/agents" element={<Agents />} />
+          <Route path="/tasks" element={<Tasks />} />
+          <Route path="/workflows" element={<Workflows />} />
+          <Route path="/projects" element={<Projects />} />
+          <Route path="/integrations" element={<PlaceholderPage title="Integrations" description="Manage API providers and external services." />} />
+          <Route path="/memory" element={<PlaceholderPage title="Memory" description="Inspect memory snapshots, embeddings, and retrieval quality." />} />
+          <Route path="/logs" element={<PlaceholderPage title="Logs" description="Live execution and system logs." />} />
+          <Route path="/settings" element={<PlaceholderPage title="Settings" description="Configure preferences, credentials, and defaults." />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </main>
+    </div>
+  );
+}
 
 function App() {
   return (
     <Router>
-      <div className="min-h-screen bg-background dark:bg-background-dark text-foreground dark:text-foreground-dark transition-colors duration-300">
-        <Sidebar />
-        <main className="ml-[72px] min-h-screen">
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/agents" element={<div className="p-10"><h1 className="text-2xl font-bold">Agents</h1><p className="mt-4 text-foreground-secondary">Agent management coming soon...</p></div>} />
-            <Route path="/tasks" element={<div className="p-10"><h1 className="text-2xl font-bold">Tasks</h1><p className="mt-4 text-foreground-secondary">Task management coming soon...</p></div>} />
-            <Route path="/workflows" element={<div className="p-10"><h1 className="text-2xl font-bold">Workflows</h1><p className="mt-4 text-foreground-secondary">Workflow builder coming soon...</p></div>} />
-            <Route path="/projects" element={<div className="p-10"><h1 className="text-2xl font-bold">Projects</h1><p className="mt-4 text-foreground-secondary">Project management coming soon...</p></div>} />
-            <Route path="/integrations" element={<div className="p-10"><h1 className="text-2xl font-bold">Integrations</h1><p className="mt-4 text-foreground-secondary">Integrations coming soon...</p></div>} />
-            <Route path="/memory" element={<div className="p-10"><h1 className="text-2xl font-bold">Memory</h1><p className="mt-4 text-foreground-secondary">Memory browser coming soon...</p></div>} />
-            <Route path="/logs" element={<div className="p-10"><h1 className="text-2xl font-bold">Logs</h1><p className="mt-4 text-foreground-secondary">System logs coming soon...</p></div>} />
-            <Route path="/settings" element={<div className="p-10"><h1 className="text-2xl font-bold">Settings</h1><p className="mt-4 text-foreground-secondary">Settings coming soon...</p></div>} />
-          </Routes>
-        </main>
-      </div>
+      <AppLayout />
     </Router>
   );
 }
