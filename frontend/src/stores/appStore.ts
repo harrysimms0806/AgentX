@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Agent, Task, Project, WorkspaceLock, Integration } from '../types';
+import type { Agent, Task, Project, WorkspaceLock, Integration } from '../types/index.js';
 
 interface AppState {
   sidebarCollapsed: boolean;
