@@ -131,7 +131,8 @@ const DashboardConfigSchema = z.object({
 export class ConfigBridge extends EventEmitter {
   constructor() {
     super();
-    this.configPath = process.env.OPENCLAW_CONFIG_PATH || '/Users/bud/.openclaw/config.json';
+    // Use the actual OpenClaw config from the project build
+    this.configPath = process.env.OPENCLAW_CONFIG_PATH || '/Users/bud/BUD BOT/projects/AgentX/build/AgentX.app/Contents/Resources/config/openclaw.config.json';
     this.overlayPath = process.env.DASHBOARD_OVERLAY_PATH || './dashboard.overlay.json';
     this.currentConfig = null;
     this.lastHash = null;
