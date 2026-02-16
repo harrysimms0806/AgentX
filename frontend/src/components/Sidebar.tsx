@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
@@ -46,15 +45,14 @@ const sidebarItems = [
 export function Sidebar() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { sidebarCollapsed, toggleSidebar, activeProject, setActiveProject } = useAppStore();
+  const { sidebarCollapsed, toggleSidebar, activeProject } = useAppStore();
   
   // Determine active item from current path
   const currentPath = location.pathname;
   const activeItem = sidebarItems.find(item => item.path === currentPath)?.id || 'dashboard';
 
   const handleNewProject = () => {
-    // TODO: Open new project modal
-    console.log('New Project clicked');
+    navigate('/projects');
   };
 
   return (
@@ -126,9 +124,10 @@ export function Sidebar() {
           >
             <div className="w-2 h-2 rounded-full bg-accent" />
             {!sidebarCollapsed && (
-              <span className="text-sm font-medium text-accent truncate">
-                Project Locked
-              </span>
+              <div className="truncate">
+                <p className="text-sm font-medium text-accent truncate">Project Locked</p>
+                <p className="text-xs text-foreground-secondary truncate">{activeProject.path}</p>
+              </div>
             )}
           </div>
         ) : (
