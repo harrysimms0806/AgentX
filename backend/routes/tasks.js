@@ -222,7 +222,6 @@ router.post('/:id/cancel', async (req, res) => {
   }
 });
 
-export default router;
 
 // Get all tasks
 router.get('/', (req, res) => {

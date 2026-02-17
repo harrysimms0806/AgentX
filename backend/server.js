@@ -344,6 +344,3 @@ initializeServices().then(() => {
     console.log(`\n📝 Documentation: /docs/api.md\n`);
   });
 });
-    console.log(`   GET /api/agents/control/health/summary - Health summary\n`);
-  });
-});

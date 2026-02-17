@@ -132,13 +132,15 @@ export const useNotificationStore = create<NotificationState & NotificationActio
       partialize: (state) => ({ notifications: state.notifications }),
       onRehydrateStorage: () => (state) => {
         if (state && state.notifications.length === 0) {
-          // Add sample notifications on first load
-          sampleNotifications.forEach((n, index) => {
-            setTimeout(() => {
-              const { addNotification } = useNotificationStore.getState();
-              addNotification(n);
-            }, index * 100);
-          });
+          // Seed sample notifications synchronously (single state update)
+          const now = Date.now();
+          const seeded: Notification[] = sampleNotifications.map((n, i) => ({
+            ...n,
+            id: `seed-${i}-${now}`,
+            timestamp: now - i * 60_000,
+            read: false,
+          }));
+          useNotificationStore.setState({ notifications: seeded });
         }
       },
     }

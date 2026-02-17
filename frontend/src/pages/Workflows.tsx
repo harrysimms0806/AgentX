@@ -93,7 +93,7 @@ export function Workflows() {
       setWorkflows(sampleWorkflows);
       setActiveWorkflow(sampleWorkflows[0].id);
     }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const activeWorkflow = workflows.find(w => w.id === activeWorkflowId);
   
