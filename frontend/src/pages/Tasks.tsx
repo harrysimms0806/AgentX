@@ -5,7 +5,9 @@ import {
   ArrowUpDown
 } from 'lucide-react';
 import { TaskModal } from '../components/TaskModal';
+import { BulkOperations } from '../components/BulkOperations';
 import { useAppStore } from '../stores/appStore';
+import { toast } from '../components/Toast';
 import { 
   getTasks, getAgents, getProjects, createTask, 
   deleteTask
@@ -121,22 +123,56 @@ export function Tasks() {
     try {
       await deleteTask(id);
       removeTask(id);
+      toast.success('Task deleted successfully');
     } catch (err) {
-      alert('Failed to delete task: ' + (err as Error).message);
+      toast.error('Failed to delete task: ' + (err as Error).message);
     }
   };
 
   const handleBulkDelete = async () => {
     if (!confirm(`Delete ${selectedTasks.size} selected tasks?`)) return;
     const ids = Array.from(selectedTasks);
+    let successCount = 0;
     for (const id of ids) {
       try {
         await deleteTask(id);
         removeTask(id);
+        successCount++;
       } catch (err) {
         console.error('Failed to delete task:', err);
       }
     }
+    setSelectedTasks(new Set());
+    toast.success(`Deleted ${successCount} tasks`);
+  };
+
+  const handleExportSelected = () => {
+    const selected = tasks.filter(t => selectedTasks.has(t.id));
+    const dataStr = JSON.stringify(selected, null, 2);
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `tasks-export-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    toast.success(`Exported ${selected.length} tasks`);
+    setSelectedTasks(new Set());
+  };
+
+  const handleBulkRun = () => {
+    toast.info(`Running ${selectedTasks.size} tasks...`);
+    // Implementation would queue tasks for execution
+    setSelectedTasks(new Set());
+  };
+
+  const selectAllTasks = () => {
+    setSelectedTasks(new Set(filteredTasks.map((t) => t.id)));
+  };
+
+  const deselectAllTasks = () => {
     setSelectedTasks(new Set());
   };
 
@@ -152,9 +188,9 @@ export function Tasks() {
 
   const selectAll = () => {
     if (selectedTasks.size === filteredTasks.length) {
-      setSelectedTasks(new Set());
+      deselectAllTasks();
     } else {
-      setSelectedTasks(new Set(filteredTasks.map((t) => t.id)));
+      selectAllTasks();
     }
   };
 
@@ -283,6 +319,17 @@ export function Tasks() {
         )}
       </div>
 
+      {/* Bulk Operations Bar */}
+      <BulkOperations
+        selectedCount={selectedTasks.size}
+        totalCount={filteredTasks.length}
+        onSelectAll={selectAllTasks}
+        onDeselectAll={deselectAllTasks}
+        onDelete={handleBulkDelete}
+        onRun={handleBulkRun}
+        onExport={handleExportSelected}
+      />
+
       {/* Task List */}
       {loading ? (
         <div className="glass-card p-8 text-center">
@@ -403,8 +450,14 @@ export function Tasks() {
         projects={projects}
         onClose={() => setShowModal(false)}
         onSubmit={async (data) => {
-          const task = await createTask(data);
-          addTask(task);
+          try {
+            const task = await createTask(data);
+            addTask(task);
+            toast.success(`Task "${task.title || 'Untitled'}" created successfully`);
+            setShowModal(false);
+          } catch (err) {
+            toast.error('Failed to create task');
+          }
         }}
       />
     </div>

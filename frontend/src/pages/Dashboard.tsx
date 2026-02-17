@@ -24,6 +24,8 @@ import {
 import { AgentCard } from '../components/AgentCard';
 import { TaskCard } from '../components/TaskCard';
 import { TaskModal } from '../components/TaskModal';
+import { ActivityFeed } from '../components/ActivityFeed';
+import { SystemHealthMonitor } from '../components/SystemHealthMonitor';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { createProject, createTask, getAgents, getProjects, getStats, getTasks } from '../utils/api';
 import { useAppStore } from '../stores/appStore';
@@ -562,6 +564,29 @@ export function Dashboard() {
         </motion.section>
       </div>
 
+      {/* Activity Feed & System Health */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mt-8">
+        {/* System Health Monitor */}
+        <motion.section 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.6 }}
+          className="xl:col-span-1"
+        >
+          <SystemHealthMonitor />
+        </motion.section>
+
+        {/* Activity Feed */}
+        <motion.section 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.7 }}
+          className="xl:col-span-2"
+        >
+          <ActivityFeed />
+        </motion.section>
+      </div>
+
       {/* Quick Actions FAB */}
       <motion.button
         initial={{ scale: 0 }}
@@ -574,7 +599,7 @@ export function Dashboard() {
             const name = `Project ${projects.length + 1}`;
             const project = await createProject({ name, path: `/workspace/${name.replace(/\s+/g, '-')}` });
             addProject(project);
-            toast.success('Project created', `${project.name} has been created successfully`, {
+            toast.success(`${project.name} has been created successfully`, {
               action: {
                 label: 'View project',
                 onClick: () => navigate('/projects'),
@@ -582,7 +607,7 @@ export function Dashboard() {
             });
             navigate('/projects');
           } catch (err) {
-            toast.error('Failed to create project', err instanceof Error ? err.message : 'Unknown error');
+            toast.error('Failed to create project');
           }
         }}
       >
@@ -599,10 +624,10 @@ export function Dashboard() {
           try {
             const task = await createTask(data);
             addTask(task);
-            toast.success('Task created', `${task.title} has been added to the queue`);
+            toast.success(`${task.title} has been added to the queue`);
             setShowTaskModal(false);
           } catch (err) {
-            toast.error('Failed to create task', err instanceof Error ? err.message : 'Unknown error');
+            toast.error('Failed to create task');
           }
         }}
       />

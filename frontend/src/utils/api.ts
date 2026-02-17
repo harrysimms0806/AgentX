@@ -61,6 +61,58 @@ export interface DashboardStats {
   completedToday: number;
 }
 
+export interface AnalyticsOverview {
+  rangeDays: 7 | 30 | 90;
+  totals: {
+    totalTasks: number;
+    completionRate: number;
+    avgCost: number;
+    activeAgents: number;
+  };
+  trends: {
+    totalTasks: number;
+    completionRate: number;
+    avgCost: number;
+    activeAgents: number;
+  };
+  statusDistribution: Array<{ status: string; count: number }>;
+}
+
+export interface AnalyticsTrendPoint {
+  date: string;
+  created: number;
+  completed: number;
+  failed: number;
+  completionRate: number;
+}
+
+export interface AnalyticsAgentMetric {
+  id: string;
+  name: string;
+  status: string;
+  totalTasks: number;
+  tasksCompleted: number;
+  tasksFailed: number;
+  successRate: number;
+  avgResponseTime: number;
+  avgCost: number;
+}
+
+export interface AnalyticsHourlyPoint {
+  hour: number;
+  total: number;
+  completed: number;
+  failed: number;
+}
+
+export interface AnalyticsCostPoint {
+  date: string;
+  dailyCost: number;
+  avgCost: number;
+  tasksCount: number;
+  cumulativeCost: number;
+}
+
 const parseJson = async <T>(response: Response): Promise<T> => {
   if (!response.ok) {
     throw new Error(`Request failed with status ${response.status}`);
@@ -179,6 +231,41 @@ export async function getProjects(): Promise<Project[]> {
 
 export async function getStats(): Promise<DashboardStats> {
   const result = await parseJson<ApiResponse<DashboardStats>>(await fetch('/api/stats'));
+  return result.data;
+}
+
+export async function getAnalyticsOverview(range: 7 | 30 | 90 = 30): Promise<AnalyticsOverview> {
+  const result = await parseJson<ApiResponse<AnalyticsOverview>>(
+    await fetch(`/api/analytics/overview?range=${range}`)
+  );
+  return result.data;
+}
+
+export async function getAnalyticsTrends(range: 7 | 30 | 90 = 30): Promise<AnalyticsTrendPoint[]> {
+  const result = await parseJson<ApiResponse<AnalyticsTrendPoint[]>>(
+    await fetch(`/api/analytics/trends?range=${range}`)
+  );
+  return result.data;
+}
+
+export async function getAnalyticsAgents(range: 7 | 30 | 90 = 30): Promise<AnalyticsAgentMetric[]> {
+  const result = await parseJson<ApiResponse<AnalyticsAgentMetric[]>>(
+    await fetch(`/api/analytics/agents?range=${range}`)
+  );
+  return result.data;
+}
+
+export async function getAnalyticsHourly(range: 7 | 30 | 90 = 30): Promise<AnalyticsHourlyPoint[]> {
+  const result = await parseJson<ApiResponse<AnalyticsHourlyPoint[]>>(
+    await fetch(`/api/analytics/hourly?range=${range}`)
+  );
+  return result.data;
+}
+
+export async function getAnalyticsCosts(range: 7 | 30 | 90 = 30): Promise<AnalyticsCostPoint[]> {
+  const result = await parseJson<ApiResponse<AnalyticsCostPoint[]>>(
+    await fetch(`/api/analytics/costs?range=${range}`)
+  );
   return result.data;
 }
 

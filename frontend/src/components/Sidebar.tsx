@@ -9,6 +9,7 @@ import {
   Plug,
   Brain,
   ScrollText,
+  BarChart3,
   Settings,
   ChevronLeft,
   ChevronRight,
@@ -27,6 +28,7 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   Plug,
   Brain,
   ScrollText,
+  BarChart3,
   Settings,
 };
 
@@ -39,6 +41,7 @@ const sidebarItems = [
   { id: 'integrations', label: 'Integrations', icon: 'Plug', path: '/integrations' },
   { id: 'memory', label: 'Memory', icon: 'Brain', path: '/memory' },
   { id: 'logs', label: 'Logs', icon: 'ScrollText', path: '/logs' },
+  { id: 'analytics', label: 'Analytics', icon: 'BarChart3', path: '/analytics' },
   { id: 'settings', label: 'Settings', icon: 'Settings', path: '/settings' },
 ];
 

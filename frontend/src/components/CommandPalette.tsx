@@ -178,10 +178,10 @@ export function CommandPalette() {
         const isDark = html.classList.contains('dark');
         if (isDark) {
           html.classList.remove('dark');
-          toast.info('Theme changed', 'Light mode enabled');
+          toast.info('Theme changed: Light mode enabled');
         } else {
           html.classList.add('dark');
-          toast.info('Theme changed', 'Dark mode enabled');
+          toast.info('Theme changed: Dark mode enabled');
         }
         setIsOpen(false);
       },
@@ -195,7 +195,7 @@ export function CommandPalette() {
       icon: RefreshCw,
       shortcut: '⌘ R',
       action: () => {
-        toast.info('Refreshing...', 'Reloading dashboard data');
+        toast.info('Refreshing dashboard data...');
         window.location.reload();
       },
       category: 'Quick Actions',

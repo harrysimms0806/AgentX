@@ -3,6 +3,7 @@ import { Plus, Bot, Sparkles, Shield, Code, Search } from 'lucide-react';
 import { AgentCard } from '../components/AgentCard';
 import { useAppStore } from '../stores/appStore';
 import { getAgents, createAgent, deleteAgent } from '../utils/api';
+import { toast } from '../components/Toast';
 import type { Agent } from '../types/index.js';
 import { cn } from '../utils/cn';
 
@@ -47,10 +48,11 @@ export function Agents() {
         config: { maxConcurrentTasks: 3, timeout: 300000 },
       });
       addAgent(agent);
+      toast.success(`Agent "${agent.name}" created successfully`);
       setShowModal(false);
       setFormData({ name: '', type: 'builder', provider: 'openai', model: 'gpt-4o', capabilities: [] });
     } catch (err) {
-      alert('Failed to create agent: ' + (err as Error).message);
+      toast.error('Failed to create agent: ' + (err as Error).message);
     } finally {
       setIsSubmitting(false);
     }
@@ -61,8 +63,9 @@ export function Agents() {
     try {
       await deleteAgent(id);
       removeAgent(id);
+      toast.success('Agent deleted successfully');
     } catch (err) {
-      alert('Failed to delete agent: ' + (err as Error).message);
+      toast.error('Failed to delete agent: ' + (err as Error).message);
     }
   };
 
