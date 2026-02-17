@@ -20,6 +20,10 @@ interface AppState {
   setAgents: (agents: Agent[]) => void;
   setTasks: (tasks: Task[]) => void;
   setProjects: (projects: Project[]) => void;
+  setIntegrations: (integrations: Integration[]) => void;
+
+  addAgent: (agent: Agent) => void;
+  removeAgent: (agentId: string) => void;
 
   setAgentStatus: (agentId: string, status: Agent['status']) => void;
   upsertTask: (task: Task) => void;
@@ -29,6 +33,7 @@ interface AppState {
   removeTask: (taskId: string) => void;
 
   addProject: (project: Project) => void;
+  removeProject: (projectId: string) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -50,6 +55,10 @@ export const useAppStore = create<AppState>()(
       setAgents: (agents) => set({ agents }),
       setTasks: (tasks) => set({ tasks }),
       setProjects: (projects) => set({ projects }),
+      setIntegrations: (integrations) => set({ integrations }),
+
+      addAgent: (agent) => set((state) => ({ agents: [agent, ...state.agents] })),
+      removeAgent: (agentId) => set((state) => ({ agents: state.agents.filter((a) => a.id !== agentId) })),
 
       setAgentStatus: (agentId, status) =>
         set((state) => ({
@@ -74,6 +83,7 @@ export const useAppStore = create<AppState>()(
       removeTask: (taskId) => set((state) => ({ tasks: state.tasks.filter((task) => task.id !== taskId) })),
 
       addProject: (project) => set((state) => ({ projects: [project, ...state.projects] })),
+      removeProject: (projectId) => set((state) => ({ projects: state.projects.filter((p) => p.id !== projectId) })),
     }),
     {
       name: 'agentx-storage',

@@ -140,6 +140,28 @@ const mapProject = (project: DbProject): Project => ({
   updatedAt: new Date(project.updated_at),
 });
 
+export async function createAgent(payload: {
+  name: string;
+  type: Agent['type'];
+  provider: string;
+  model?: string;
+  capabilities?: string[];
+  avatar?: string;
+  config?: { maxConcurrentTasks?: number; timeout?: number };
+}): Promise<Agent> {
+  const response = await fetch('/api/agents', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const result = await parseJson<ApiResponse<DbAgent>>(response);
+  return mapAgent(result.data);
+}
+
+export async function deleteAgent(id: string): Promise<void> {
+  await fetch(`/api/agents/${id}`, { method: 'DELETE' });
+}
+
 export async function getAgents(): Promise<Agent[]> {
   const result = await parseJson<ApiResponse<DbAgent[]>>(await fetch('/api/agents'));
   return result.data.map(mapAgent);
@@ -177,6 +199,20 @@ export async function createTask(payload: {
   return mapTask(result.data);
 }
 
+export async function deleteTask(id: string): Promise<void> {
+  await fetch(`/api/tasks/${id}`, { method: 'DELETE' });
+}
+
+export async function updateTaskStatus(id: string, status: Task['status']): Promise<Task> {
+  const response = await fetch(`/api/tasks/${id}/status`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  });
+  const result = await parseJson<ApiResponse<DbTask>>(response);
+  return mapTask(result.data);
+}
+
 export async function createProject(payload: { name: string; path: string; description?: string }): Promise<Project> {
   const response = await fetch('/api/projects', {
     method: 'POST',
@@ -185,4 +221,216 @@ export async function createProject(payload: { name: string; path: string; descr
   });
   const result = await parseJson<ApiResponse<DbProject>>(response);
   return mapProject(result.data);
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  await fetch(`/api/projects/${id}`, { method: 'DELETE' });
+}
+
+// ========== Integrations ==========
+export type { Integration } from '../types/index.js';
+
+interface DbIntegration {
+  id: string;
+  name: string;
+  type: 'api' | 'service' | 'database' | 'messaging';
+  provider: string;
+  status: 'connected' | 'disconnected' | 'error';
+  config: string;
+  created_at: string;
+  last_sync?: string;
+}
+
+const mapIntegration = (integration: DbIntegration): import('../types/index.js').Integration => ({
+  id: integration.id,
+  name: integration.name,
+  type: integration.type,
+  provider: integration.provider,
+  status: integration.status,
+  config: integration.config ? JSON.parse(integration.config) : {},
+  lastSync: integration.last_sync ? new Date(integration.last_sync) : undefined,
+});
+
+export async function getIntegrations(): Promise<import('../types/index.js').Integration[]> {
+  const result = await parseJson<ApiResponse<DbIntegration[]>>(await fetch('/api/integrations'));
+  return result.data.map(mapIntegration);
+}
+
+export async function createIntegration(payload: {
+  name: string;
+  type: 'api' | 'service' | 'database' | 'messaging';
+  provider: string;
+  config?: Record<string, unknown>;
+}): Promise<import('../types/index.js').Integration> {
+  const response = await fetch('/api/integrations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const result = await parseJson<ApiResponse<DbIntegration>>(response);
+  return mapIntegration(result.data);
+}
+
+export async function updateIntegrationStatus(id: string, status: 'connected' | 'disconnected' | 'error'): Promise<import('../types/index.js').Integration> {
+  const response = await fetch(`/api/integrations/${id}/status`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  });
+  const result = await parseJson<ApiResponse<DbIntegration>>(response);
+  return mapIntegration(result.data);
+}
+
+export async function deleteIntegration(id: string): Promise<void> {
+  await fetch(`/api/integrations/${id}`, { method: 'DELETE' });
+}
+
+export async function testIntegration(id: string): Promise<{ success: boolean; message: string }> {
+  const result = await parseJson<ApiResponse<{ success: boolean; message: string }>>(
+    await fetch(`/api/integrations/${id}/test`, { method: 'POST' })
+  );
+  return result.data;
+}
+
+// ========== Audit Logs ==========
+export interface AuditLog {
+  id: string;
+  timestamp: Date;
+  agentId?: string;
+  agentName?: string;
+  integration?: string;
+  actionType: string;
+  action: string;
+  result: 'success' | 'failure' | 'blocked';
+  details?: Record<string, unknown>;
+}
+
+interface DbAuditLog {
+  id: string;
+  timestamp: string;
+  agent_id?: string;
+  agent_name?: string;
+  integration?: string;
+  action_type: string;
+  action: string;
+  result: string;
+  details?: string;
+}
+
+const mapAuditLog = (log: DbAuditLog): AuditLog => ({
+  id: log.id,
+  timestamp: new Date(log.timestamp),
+  agentId: log.agent_id,
+  agentName: log.agent_name,
+  integration: log.integration,
+  actionType: log.action_type,
+  action: log.action,
+  result: log.result as AuditLog['result'],
+  details: log.details ? JSON.parse(log.details) : undefined,
+});
+
+export async function getAuditLogs(filters?: {
+  agentId?: string;
+  actionType?: string;
+  result?: string;
+  limit?: number;
+}): Promise<AuditLog[]> {
+  const params = new URLSearchParams();
+  if (filters?.agentId) params.append('agentId', filters.agentId);
+  if (filters?.actionType) params.append('actionType', filters.actionType);
+  if (filters?.result) params.append('result', filters.result);
+  if (filters?.limit) params.append('limit', filters.limit.toString());
+  
+  const result = await parseJson<ApiResponse<DbAuditLog[]>>(
+    await fetch(`/api/audit?${params.toString()}`)
+  );
+  return result.data.map(mapAuditLog);
+}
+
+// ========== Workspace Locks ==========
+export interface WorkspaceLock {
+  id: string;
+  projectId: string;
+  projectName: string;
+  projectColor?: string;
+  agentId: string;
+  agentName: string;
+  taskId: string;
+  folderPath: string;
+  gitRoot?: string;
+  lockedAt: Date;
+  expiresAt?: Date;
+}
+
+interface DbWorkspaceLock {
+  id: string;
+  project_id: string;
+  project_name: string;
+  project_color?: string;
+  agent_id: string;
+  agent_name: string;
+  task_id: string;
+  folder_path: string;
+  git_root?: string;
+  locked_at: string;
+  expires_at?: string;
+}
+
+const mapWorkspaceLock = (lock: DbWorkspaceLock): WorkspaceLock => ({
+  id: lock.id,
+  projectId: lock.project_id,
+  projectName: lock.project_name,
+  projectColor: lock.project_color,
+  agentId: lock.agent_id,
+  agentName: lock.agent_name,
+  taskId: lock.task_id,
+  folderPath: lock.folder_path,
+  gitRoot: lock.git_root,
+  lockedAt: new Date(lock.locked_at),
+  expiresAt: lock.expires_at ? new Date(lock.expires_at) : undefined,
+});
+
+export async function getWorkspaceLocks(): Promise<WorkspaceLock[]> {
+  const result = await parseJson<ApiResponse<DbWorkspaceLock[]>>(await fetch('/api/locks'));
+  return result.data.map(mapWorkspaceLock);
+}
+
+export async function releaseLock(lockId: string): Promise<void> {
+  await fetch(`/api/locks/${lockId}`, { method: 'DELETE' });
+}
+
+// ========== Config ==========
+export interface Config {
+  agents: Agent[];
+  integrations: import('../types/index.js').Integration[];
+  uiSettings: {
+    theme: 'light' | 'dark' | 'system';
+    sidebarCollapsed: boolean;
+  };
+  settingsPointers: {
+    agents: string;
+    integrations: string;
+    projects: string;
+    security: string;
+  };
+}
+
+export async function getConfig(): Promise<Config> {
+  const result = await parseJson<ApiResponse<Config>>(await fetch('/api/config'));
+  return result.data;
+}
+
+export async function getConfigHealth(): Promise<{
+  loaded: boolean;
+  configPath?: string;
+  lastReload?: string;
+  errors?: string[];
+}> {
+  const result = await parseJson<ApiResponse<{
+    loaded: boolean;
+    configPath?: string;
+    lastReload?: string;
+    errors?: string[];
+  }>>(await fetch('/api/config/health'));
+  return result.data;
 }
