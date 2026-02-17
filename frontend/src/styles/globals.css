@@ -67,6 +67,26 @@
     @apply active:scale-95;
   }
   
+  .btn-danger {
+    @apply px-4 py-2 rounded-apple;
+    @apply bg-red-500 text-white;
+    @apply font-medium text-sm;
+    @apply transition-all duration-200 ease-apple;
+    @apply hover:bg-red-600 hover:shadow-lg;
+    @apply active:scale-95;
+  }
+  
+  /* Input styles */
+  .input-apple {
+    @apply px-3 py-2 rounded-apple;
+    @apply bg-background-secondary dark:bg-background-secondary-dark;
+    @apply text-foreground dark:text-foreground-dark;
+    @apply border border-glass-border dark:border-glass-border-dark;
+    @apply transition-all duration-200;
+    @apply focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent;
+    @apply placeholder:text-foreground-tertiary;
+  }
+  
   /* Agent status badges */
   .agent-status {
     @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium;
