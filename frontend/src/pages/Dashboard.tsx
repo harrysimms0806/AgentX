@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Activity, CheckCircle2, Clock, FolderPlus, ListTodo, Plus, Zap,
-  TrendingUp, TrendingDown, Bot, Calendar, ArrowRight
+  TrendingUp, TrendingDown, Bot, Calendar, ArrowRight, Loader2
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import {
@@ -29,52 +29,80 @@ import { SystemHealthMonitor } from '../components/SystemHealthMonitor';
 import { HelpTooltip, InlineHelpIcon } from '../components/HelpTooltip';
 import { FeatureDiscoveryBadge } from '../components/HelpTooltip';
 import { useWebSocket } from '../hooks/useWebSocket';
-import { createProject, createTask, getAgents, getProjects, getStats, getTasks } from '../utils/api';
+import { 
+  createProject, 
+  createTask, 
+  getAgents, 
+  getProjects, 
+  getStats, 
+  getTasks,
+  getAnalyticsTrends,
+  getAnalyticsOverview,
+  getAnalyticsAgents,
+  getAnalyticsHourly,
+  type AnalyticsTrendPoint,
+  type AnalyticsOverview,
+  type AnalyticsAgentMetric,
+  type AnalyticsHourlyPoint,
+} from '../utils/api';
 import { useAppStore } from '../stores/appStore';
 import { cn } from '../utils/cn';
 import { toast } from '../components/Toast';
 
-// Generate sample chart data
-const generateActivityData = () => {
-  const data = [];
-  for (let i = 6; i >= 0; i--) {
-    const date = new Date();
-    date.setDate(date.getDate() - i);
-    data.push({
-      day: date.toLocaleDateString('en-US', { weekday: 'short' }),
-      tasks: Math.floor(Math.random() * 20) + 5,
-      completed: Math.floor(Math.random() * 15) + 3,
-      agents: Math.floor(Math.random() * 8) + 2,
-    });
-  }
-  return data;
+// Chart color constants
+const COLORS = {
+  blue: '#3b82f6',
+  green: '#22c55e',
+  amber: '#f59e0b',
+  red: '#ef4444',
+  purple: '#a855f7',
 };
 
-const generateHourlyData = () => {
-  const data = [];
-  for (let i = 0; i < 24; i += 2) {
-    data.push({
-      hour: `${i}:00`,
-      requests: Math.floor(Math.random() * 50) + 10,
-      errors: Math.floor(Math.random() * 5),
-    });
-  }
-  return data;
+// Transform trend data for chart
+const transformTrendData = (data: AnalyticsTrendPoint[]) => {
+  return data.map(point => ({
+    day: new Date(point.date).toLocaleDateString('en-US', { weekday: 'short' }),
+    tasks: point.created,
+    completed: point.completed,
+    failed: point.failed,
+  }));
 };
 
-const generateAgentPerformanceData = () => [
-  { name: 'Builder', tasks: 45, success: 42, color: '#3b82f6' },
-  { name: 'Reviewer', tasks: 32, success: 30, color: '#22c55e' },
-  { name: 'Coordinator', tasks: 28, success: 28, color: '#a855f7' },
-  { name: 'Researcher', tasks: 18, success: 16, color: '#f59e0b' },
-];
+// Transform hourly data for chart
+const transformHourlyData = (data: AnalyticsHourlyPoint[]) => {
+  return data.filter((_, i) => i % 2 === 0).map(point => ({
+    hour: `${point.hour}:00`,
+    requests: point.total,
+    errors: point.failed,
+  }));
+};
 
-const generateTaskStatusData = () => [
-  { name: 'Completed', value: 156, color: '#22c55e' },
-  { name: 'Pending', value: 23, color: '#f59e0b' },
-  { name: 'Failed', value: 8, color: '#ef4444' },
-  { name: 'Running', value: 12, color: '#3b82f6' },
-];
+// Transform agent performance data for chart
+const transformAgentPerformance = (data: AnalyticsAgentMetric[]) => {
+  return data.map(agent => ({
+    name: agent.name,
+    tasks: agent.totalTasks,
+    success: agent.tasksCompleted,
+    color: COLORS.blue,
+  }));
+};
+
+// Transform status distribution for pie chart
+const transformStatusData = (distribution: { status: string; count: number }[]) => {
+  const colorMap: Record<string, string> = {
+    completed: COLORS.green,
+    pending: COLORS.amber,
+    failed: COLORS.red,
+    running: COLORS.blue,
+    queued: COLORS.purple,
+  };
+  
+  return distribution.map(item => ({
+    name: item.status.charAt(0).toUpperCase() + item.status.slice(1),
+    value: item.count,
+    color: colorMap[item.status] || COLORS.blue,
+  }));
+};
 
 export function Dashboard() {
   const navigate = useNavigate();
@@ -89,19 +117,21 @@ export function Dashboard() {
     pendingTasks: 0, 
     runningTasks: 0, 
     completedToday: 0,
-    totalCost: 0,
-    avgResponseTime: 0,
   });
-  const [timeRange, setTimeRange] = useState('7d');
+  const [timeRange, setTimeRange] = useState<7 | 30 | 90>(7);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Chart data
-  const [activityData] = useState(generateActivityData());
-  const [hourlyData] = useState(generateHourlyData());
-  const [agentPerformanceData] = useState(generateAgentPerformanceData());
-  const [taskStatusData] = useState(generateTaskStatusData());
+  // Real chart data states
+  const [activityData, setActivityData] = useState<ReturnType<typeof transformTrendData>>([]);
+  const [hourlyData, setHourlyData] = useState<ReturnType<typeof transformHourlyData>>([]);
+  const [agentPerformanceData, setAgentPerformanceData] = useState<ReturnType<typeof transformAgentPerformance>>([]);
+  const [taskStatusData, setTaskStatusData] = useState<ReturnType<typeof transformStatusData>>([]);
+  const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
 
+  // Load dashboard data
   useEffect(() => {
     const load = async () => {
+      setIsLoading(true);
       try {
         const [agentsData, tasksData, projectsData, statsData] = await Promise.all([
           getAgents(),
@@ -116,6 +146,9 @@ export function Dashboard() {
         setStats(prev => ({ ...prev, ...statsData }));
       } catch (err) {
         console.error('Failed to load dashboard data:', err);
+        toast.error('Failed to load dashboard data');
+      } finally {
+        setIsLoading(false);
       }
     };
 
@@ -123,16 +156,64 @@ export function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Load analytics data when range changes
+  useEffect(() => {
+    const loadAnalytics = async () => {
+      try {
+        const [trends, overviewData, agents, hourly] = await Promise.all([
+          getAnalyticsTrends(timeRange),
+          getAnalyticsOverview(timeRange),
+          getAnalyticsAgents(timeRange),
+          getAnalyticsHourly(timeRange),
+        ]);
+
+        setActivityData(transformTrendData(trends));
+        setOverview(overviewData);
+        setTaskStatusData(transformStatusData(overviewData.statusDistribution));
+        setAgentPerformanceData(transformAgentPerformance(agents));
+        setHourlyData(transformHourlyData(hourly));
+      } catch (err) {
+        console.error('Failed to load analytics:', err);
+        // Don't show toast here - it's background data
+      }
+    };
+
+    loadAnalytics();
+  }, [timeRange]);
+
   const recentTasks = useMemo(() => tasks.slice(0, 5), [tasks]);
   const workingAgents = useMemo(() => agents.filter(a => a.status === 'working'), [agents]);
 
-  // Calculate trends (mock calculations)
-  const trends = {
-    agents: { value: 12, positive: true },
-    tasks: { value: 8, positive: true },
-    completed: { value: 24, positive: true },
-    cost: { value: -5, positive: true },
-  };
+  // Calculate trends from overview data
+  const trends = useMemo(() => {
+    if (!overview) {
+      return {
+        agents: { value: 0, positive: true },
+        tasks: { value: 0, positive: true },
+        completed: { value: 0, positive: true },
+        cost: { value: 0, positive: true },
+      };
+    }
+
+    return {
+      agents: { 
+        value: Math.abs(overview.trends.activeAgents), 
+        positive: overview.trends.activeAgents >= 0 
+      },
+      tasks: { 
+        value: Math.abs(overview.trends.totalTasks), 
+        positive: overview.trends.totalTasks >= 0 
+      },
+      completed: { 
+        value: Math.abs(overview.trends.completionRate), 
+        positive: overview.trends.completionRate >= 0 
+      },
+      cost: { 
+        value: Math.abs(overview.trends.avgCost), 
+        positive: overview.trends.avgCost <= 0 // Negative cost trend is good
+      },
+    };
+  }, [overview]);
 
   const containerVariants = {
     hidden: { opacity: 0 },
@@ -146,6 +227,17 @@ export function Dashboard() {
     hidden: { y: 20, opacity: 0 },
     visible: { y: 0, opacity: 1 }
   };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background dark:bg-background-dark flex items-center justify-center">
+        <div className="flex items-center gap-3 text-foreground-secondary">
+          <Loader2 className="w-6 h-6 animate-spin" />
+          <span>Loading dashboard...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background dark:bg-background-dark p-6">
@@ -252,7 +344,7 @@ export function Dashboard() {
                     card.trend.positive ? "text-green-500" : "text-red-500"
                   )}>
                     {card.trend.positive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                    <span>{card.trend.value}% from last week</span>
+                    <span>{card.trend.value}% from last {timeRange}d</span>
                   </div>
                 )}
               </div>
@@ -279,10 +371,10 @@ export function Dashboard() {
               <p className="text-sm text-foreground-secondary">Tasks and completions over time</p>
             </div>
             <div className="flex items-center gap-2">
-              {['24h', '7d', '30d'].map((range) => (
+              {[7, 30, 90].map((range) => (
                 <button
                   key={range}
-                  onClick={() => setTimeRange(range)}
+                  onClick={() => setTimeRange(range as 7 | 30 | 90)}
                   className={cn(
                     "px-3 py-1 rounded-lg text-sm transition-colors",
                     timeRange === range
@@ -290,67 +382,74 @@ export function Dashboard() {
                       : "hover:bg-background-secondary dark:hover:bg-background-secondary-dark"
                   )}
                 >
-                  {range}
+                  {range}d
                 </button>
               ))}
             </div>
           </div>
           
           <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={activityData}>
-                <defs>
-                  <linearGradient id="colorTasks" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
-                  </linearGradient>
-                  <linearGradient id="colorCompleted" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#22c55e" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.1} />
-                <XAxis 
-                  dataKey="day" 
-                  stroke="currentColor" 
-                  opacity={0.5}
-                  fontSize={12}
-                  tickLine={false}
-                />
-                <YAxis 
-                  stroke="currentColor" 
-                  opacity={0.5}
-                  fontSize={12}
-                  tickLine={false}
-                />
-                <Tooltip 
-                  contentStyle={{ 
-                    backgroundColor: 'var(--background)', 
-                    border: '1px solid var(--glass-border)',
-                    borderRadius: '8px'
-                  }}
-                />
-                
-                <Area 
-                  type="monotone" 
-                  dataKey="tasks" 
-                  name="Created"
-                  stroke="#3b82f6" 
-                  fillOpacity={1} 
-                  fill="url(#colorTasks)" 
-                  strokeWidth={2}
-                />
-                <Area 
-                  type="monotone" 
-                  dataKey="completed" 
-                  name="Completed"
-                  stroke="#22c55e" 
-                  fillOpacity={1} 
-                  fill="url(#colorCompleted)" 
-                  strokeWidth={2}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
+            {activityData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={activityData}>
+                  <defs>
+                    <linearGradient id="colorTasks" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                    </linearGradient>
+                    <linearGradient id="colorCompleted" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#22c55e" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.1} />
+                  <XAxis 
+                    dataKey="day" 
+                    stroke="currentColor" 
+                    opacity={0.5}
+                    fontSize={12}
+                    tickLine={false}
+                  />
+                  <YAxis 
+                    stroke="currentColor" 
+                    opacity={0.5}
+                    fontSize={12}
+                    tickLine={false}
+                  />
+                  <Tooltip 
+                    contentStyle={{ 
+                      backgroundColor: 'var(--background)', 
+                      border: '1px solid var(--glass-border)',
+                      borderRadius: '8px'
+                    }}
+                  />
+                  
+                  <Area 
+                    type="monotone" 
+                    dataKey="tasks" 
+                    name="Created"
+                    stroke="#3b82f6" 
+                    fillOpacity={1} 
+                    fill="url(#colorTasks)" 
+                    strokeWidth={2}
+                  />
+                  <Area 
+                    type="monotone" 
+                    dataKey="completed" 
+                    name="Completed"
+                    stroke="#22c55e" 
+                    fillOpacity={1} 
+                    fill="url(#colorCompleted)" 
+                    strokeWidth={2}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-foreground-secondary">
+                <Loader2 className="w-6 h-6 animate-spin mr-2" />
+                Loading chart data...
+              </div>
+            )}
           </div>
         </motion.div>
 
@@ -362,24 +461,31 @@ export function Dashboard() {
           </div>
           
           <div className="h-48">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={taskStatusData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={50}
-                  outerRadius={70}
-                  paddingAngle={5}
-                  dataKey="value"
-                >
-                  {taskStatusData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
+            {taskStatusData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={taskStatusData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={50}
+                    outerRadius={70}
+                    paddingAngle={5}
+                    dataKey="value"
+                  >
+                    {taskStatusData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-foreground-secondary">
+                <Loader2 className="w-6 h-6 animate-spin mr-2" />
+                Loading...
+              </div>
+            )}
           </div>
           
           <div className="grid grid-cols-2 gap-2 mt-4">
@@ -421,29 +527,36 @@ export function Dashboard() {
           </div>
           
           <div className="h-48">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={agentPerformanceData} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.1} horizontal={false} />
-                <XAxis type="number" stroke="currentColor" opacity={0.5} fontSize={12} />
-                <YAxis 
-                  dataKey="name" 
-                  type="category" 
-                  stroke="currentColor" 
-                  opacity={0.5}
-                  fontSize={12}
-                  width={80}
-                />
-                <Tooltip 
-                  contentStyle={{ 
-                    backgroundColor: 'var(--background)', 
-                    border: '1px solid var(--glass-border)',
-                    borderRadius: '8px'
-                  }}
-                />
-                <Bar dataKey="tasks" name="Total" fill="#3b82f6" radius={[0, 4, 4, 0]} />
-                <Bar dataKey="success" name="Success" fill="#22c55e" radius={[0, 4, 4, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            {agentPerformanceData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={agentPerformanceData} layout="vertical">
+                  <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.1} horizontal={false} />
+                  <XAxis type="number" stroke="currentColor" opacity={0.5} fontSize={12} />
+                  <YAxis 
+                    dataKey="name" 
+                    type="category" 
+                    stroke="currentColor" 
+                    opacity={0.5}
+                    fontSize={12}
+                    width={80}
+                  />
+                  <Tooltip 
+                    contentStyle={{ 
+                      backgroundColor: 'var(--background)', 
+                      border: '1px solid var(--glass-border)',
+                      borderRadius: '8px'
+                    }}
+                  />
+                  <Bar dataKey="tasks" name="Total" fill="#3b82f6" radius={[0, 4, 4, 0]} />
+                  <Bar dataKey="success" name="Success" fill="#22c55e" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-foreground-secondary">
+                <Loader2 className="w-6 h-6 animate-spin mr-2" />
+                Loading agent data...
+              </div>
+            )}
           </div>
         </motion.div>
 
@@ -455,48 +568,55 @@ export function Dashboard() {
           </div>
           
           <div className="h-48">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={hourlyData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.1} />
-                <XAxis 
-                  dataKey="hour" 
-                  stroke="currentColor" 
-                  opacity={0.5}
-                  fontSize={10}
-                  tickLine={false}
-                  interval={2}
-                />
-                <YAxis 
-                  stroke="currentColor" 
-                  opacity={0.5}
-                  fontSize={12}
-                  tickLine={false}
-                />
-                <Tooltip 
-                  contentStyle={{ 
-                    backgroundColor: 'var(--background)', 
-                    border: '1px solid var(--glass-border)',
-                    borderRadius: '8px'
-                  }}
-                />
-                <Line 
-                  type="monotone" 
-                  dataKey="requests" 
-                  name="Requests"
-                  stroke="#3b82f6" 
-                  strokeWidth={2}
-                  dot={false}
-                />
-                <Line 
-                  type="monotone" 
-                  dataKey="errors" 
-                  name="Errors"
-                  stroke="#ef4444" 
-                  strokeWidth={2}
-                  dot={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            {hourlyData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={hourlyData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.1} />
+                  <XAxis 
+                    dataKey="hour" 
+                    stroke="currentColor" 
+                    opacity={0.5}
+                    fontSize={10}
+                    tickLine={false}
+                    interval={2}
+                  />
+                  <YAxis 
+                    stroke="currentColor" 
+                    opacity={0.5}
+                    fontSize={12}
+                    tickLine={false}
+                  />
+                  <Tooltip 
+                    contentStyle={{ 
+                      backgroundColor: 'var(--background)', 
+                      border: '1px solid var(--glass-border)',
+                      borderRadius: '8px'
+                    }}
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="requests" 
+                    name="Requests"
+                    stroke="#3b82f6" 
+                    strokeWidth={2}
+                    dot={false}
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="errors" 
+                    name="Errors"
+                    stroke="#ef4444" 
+                    strokeWidth={2}
+                    dot={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-foreground-secondary">
+                <Loader2 className="w-6 h-6 animate-spin mr-2" />
+                Loading hourly data...
+              </div>
+            )}
           </div>
         </motion.div>
       </motion.div>
@@ -659,3 +779,5 @@ export function Dashboard() {
     </div>
   );
 }
+
+export default Dashboard;
