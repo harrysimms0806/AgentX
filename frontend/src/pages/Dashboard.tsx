@@ -29,13 +29,10 @@ import { SystemHealthMonitor } from '../components/SystemHealthMonitor';
 import { HelpTooltip, InlineHelpIcon } from '../components/HelpTooltip';
 import { FeatureDiscoveryBadge } from '../components/HelpTooltip';
 import { useWebSocket } from '../hooks/useWebSocket';
-import { 
-  createProject, 
-  createTask, 
-  getAgents, 
-  getProjects, 
-  getStats, 
-  getTasks,
+import {
+  createProject,
+  createTask,
+  getStats,
   getAnalyticsTrends,
   getAnalyticsOverview,
   getAnalyticsAgents,
@@ -108,14 +105,11 @@ export function Dashboard() {
   const navigate = useNavigate();
   const { connected } = useWebSocket();
   const { agents, tasks, projects, addTask, addProject } = useAppStore();
-  const setAgents = useAppStore.getState().setAgents;
-  const setTasks = useAppStore.getState().setTasks;
-  const setProjects = useAppStore.getState().setProjects;
   const [showTaskModal, setShowTaskModal] = useState(false);
-  const [stats, setStats] = useState({ 
-    activeAgents: 0, 
-    pendingTasks: 0, 
-    runningTasks: 0, 
+  const [stats, setStats] = useState({
+    activeAgents: 0,
+    pendingTasks: 0,
+    runningTasks: 0,
     completedToday: 0,
   });
   const [timeRange, setTimeRange] = useState<7 | 30 | 90>(7);
@@ -128,24 +122,15 @@ export function Dashboard() {
   const [taskStatusData, setTaskStatusData] = useState<ReturnType<typeof transformStatusData>>([]);
   const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
 
-  // Load dashboard data
+  // Load dashboard-specific stats (agents/tasks/projects already loaded by App.tsx)
   useEffect(() => {
     const load = async () => {
       setIsLoading(true);
       try {
-        const [agentsData, tasksData, projectsData, statsData] = await Promise.all([
-          getAgents(),
-          getTasks(),
-          getProjects(),
-          getStats(),
-        ]);
-
-        setAgents(agentsData);
-        setTasks(tasksData);
-        setProjects(projectsData);
+        const statsData = await getStats();
         setStats(prev => ({ ...prev, ...statsData }));
       } catch (err) {
-        console.error('Failed to load dashboard data:', err);
+        console.error('Failed to load dashboard stats:', err);
         toast.error('Failed to load dashboard data');
       } finally {
         setIsLoading(false);
@@ -153,7 +138,6 @@ export function Dashboard() {
     };
 
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Load analytics data when range changes
