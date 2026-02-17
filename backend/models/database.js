@@ -137,50 +137,12 @@ export function initDatabase() {
     )
   `);
 
-  // Insert default agents
-  const defaultAgents = [
-    {
-      id: 'bud',
-      name: 'Bud',
-      type: 'coordinator',
-      provider: 'OpenClaw',
-      model: null,
-      capabilities: JSON.stringify(['planning', 'coordination', 'documentation', 'review']),
-      avatar: '🌱',
-      config: JSON.stringify({ maxConcurrentTasks: 5, timeout: 30000, retryAttempts: 3 }),
-    },
-    {
-      id: 'codex',
-      name: 'Codex',
-      type: 'builder',
-      provider: 'OpenAI',
-      model: 'gpt-5.3-codex',
-      capabilities: JSON.stringify(['code-generation', 'refactoring', 'debugging', 'architecture']),
-      avatar: '🤖',
-      config: JSON.stringify({ maxConcurrentTasks: 2, timeout: 120000, retryAttempts: 2 }),
-    },
-    {
-      id: 'local',
-      name: 'Local',
-      type: 'local',
-      provider: 'Ollama',
-      model: 'qwen2.5-coder:14b',
-      capabilities: JSON.stringify(['quick-edits', 'css', 'simple-fixes']),
-      avatar: '💻',
-      config: JSON.stringify({ maxConcurrentTasks: 1, timeout: 60000, retryAttempts: 1 }),
-    },
-  ];
-
-  const insertAgent = db.prepare(`
-    INSERT OR IGNORE INTO agents (id, name, type, provider, model, capabilities, avatar, config)
-    VALUES (@id, @name, @type, @provider, @model, @capabilities, @avatar, @config)
-  `);
-
-  for (const agent of defaultAgents) {
-    insertAgent.run(agent);
-  }
+  // NOTE: Agents are now synced from OpenClaw config via AgentSync service
+  // This prevents hardcoded fixtures and ensures dashboard shows real agents
+  // See: backend/services/AgentSync.js
 
   console.log('✅ Database initialized');
+  console.log('   Agents will be synced from OpenClaw config on server start');
 }
 
 export default db;
