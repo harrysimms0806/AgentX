@@ -4,8 +4,8 @@ import {
   ChevronRight, ChevronLeft, Check, Bot, Settings, Shield, Sparkles,
   AlertCircle 
 } from 'lucide-react';
-import { cn } from '../../utils/cn';
-import { useAppStore } from '../../stores/appStore';
+import { cn } from '../utils/cn';
+import { useAppStore } from '../stores/appStore';
 
 interface WizardStep {
   id: number;
@@ -335,7 +335,7 @@ export function AgentCreationWizard({ onClose, onComplete }: { onClose: () => vo
             </button>
           </div>
           <div className="flex gap-2">
-            {steps.map((step, idx) => {
+            {steps.map((step) => {
               const Icon = step.icon;
               const isActive = currentStep === step.id;
               const isComplete = currentStep > step.id;
