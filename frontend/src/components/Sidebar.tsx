@@ -16,6 +16,7 @@ import {
   Plus,
 } from 'lucide-react';
 import { SidebarItem } from './SidebarItem';
+import { NotificationBell } from './NotificationCenter';
 import { useAppStore } from '../stores/appStore';
 import { cn } from '../utils/cn';
 
@@ -87,16 +88,19 @@ export function Sidebar() {
           )}
         </AnimatePresence>
         
-        <button
-          onClick={toggleSidebar}
-          className="p-1.5 rounded-lg hover:bg-background-secondary dark:hover:bg-background-secondary-dark transition-colors"
-        >
-          {sidebarCollapsed ? (
-            <ChevronRight className="w-4 h-4" />
-          ) : (
-            <ChevronLeft className="w-4 h-4" />
-          )}
-        </button>
+        <div className="flex items-center gap-1">
+          <NotificationBell />
+          <button
+            onClick={toggleSidebar}
+            className="p-1.5 rounded-lg hover:bg-background-secondary dark:hover:bg-background-secondary-dark transition-colors"
+          >
+            {sidebarCollapsed ? (
+              <ChevronRight className="w-4 h-4" />
+            ) : (
+              <ChevronLeft className="w-4 h-4" />
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Navigation */}

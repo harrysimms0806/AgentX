@@ -4,6 +4,8 @@ import { Sidebar } from './components/Sidebar';
 import { CommandPalette } from './components/CommandPalette';
 import { ToastContainer, KeyboardShortcutsHelp } from './components/Toast';
 import { OnboardingTour } from './components/OnboardingTour';
+import { NotificationCenter } from './components/NotificationCenter';
+import { QuickActions } from './components/QuickActions';
 import { Dashboard } from './pages/Dashboard';
 import { Agents } from './pages/Agents';
 import { Tasks } from './pages/Tasks';
@@ -15,6 +17,7 @@ import { Logs } from './pages/Logs';
 import { Analytics } from './pages/Analytics';
 import { SettingsPage } from './pages/Settings';
 import { useAppStore } from './stores/appStore';
+import { useNotificationStore } from './stores/notificationStore';
 import { useKeyboardShortcuts, useSystemTheme, getSystemTheme, type KeySequence } from './hooks/useKeyboardShortcuts';
 import { getAgents, getProjects, getTasks } from './utils/api';
 
@@ -22,6 +25,7 @@ function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const { togglePanel: toggleNotificationPanel } = useNotificationStore();
   
   const { 
     sidebarCollapsed, 
@@ -109,6 +113,10 @@ function AppContent() {
     // Refresh Data
     { id: 'refresh', keys: ['Meta', 'r'], handler: refreshData, preventWhenTyping: true },
     { id: 'refresh-ctrl', keys: ['Control', 'r'], handler: refreshData, preventWhenTyping: true },
+    
+    // Notification Panel
+    { id: 'notifications', keys: ['Meta', 'Shift', 'n'], handler: toggleNotificationPanel, preventWhenTyping: true },
+    { id: 'notifications-ctrl', keys: ['Control', 'Shift', 'n'], handler: toggleNotificationPanel, preventWhenTyping: true },
   ];
 
   // Initialize keyboard shortcuts
@@ -175,6 +183,8 @@ function AppContent() {
     <div className="min-h-screen bg-background dark:bg-background-dark text-foreground dark:text-foreground-dark transition-colors duration-300">
       <OnboardingTour />
       <Sidebar />
+      <NotificationCenter />
+      <QuickActions />
       <CommandPalette open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} />
       <ToastContainer />
       <KeyboardShortcutsHelp />
