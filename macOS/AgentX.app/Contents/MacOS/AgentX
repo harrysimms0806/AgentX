@@ -1,0 +1,93 @@
+#!/bin/bash
+
+# AgentX Launcher - Self-referential (works from /Applications or anywhere)
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_DIR="$SCRIPT_DIR/../Resources"
+NODE_BIN="$APP_DIR/node/bin/node"
+NPM_BIN="$APP_DIR/node/bin/npm"
+LOG_FILE="$HOME/Library/Logs/AgentX/launcher.log"
+
+mkdir -p "$(dirname "$LOG_FILE")"
+
+log() {
+    echo "[$(date)] $1" | tee -a "$LOG_FILE"
+}
+
+log "🚀 Starting AgentX..."
+log "📁 Dir: $APP_DIR"
+
+# Kill any existing AgentX processes first
+killall node 2>/dev/null || true
+killall npm 2>/dev/null || true
+killall electron 2>/dev/null || true
+sleep 2
+
+export PATH="$APP_DIR/node/bin:$PATH"
+export AGENTX_STANDALONE="1"
+export NODE_ENV="development"
+export OPENCLAW_CONFIG_PATH="$APP_DIR/config/openclaw.config.json"
+export DASHBOARD_OVERLAY_PATH="$APP_DIR/config/dashboard.overlay.json"
+
+cd "$APP_DIR" || exit 1
+
+# Initialize database
+if [ ! -d "database" ]; then
+    log "🗄️ Creating database dir..."
+    mkdir -p database
+fi
+
+# Start backend
+log "🔧 Starting backend..."
+"$NODE_BIN" backend/server.js >> "$LOG_FILE" 2>&1 &
+echo $! > /tmp/agentx-backend.pid
+BACKEND_PID=$!
+log "   PID: $BACKEND_PID"
+
+# Wait for backend
+log "⏳ Waiting for backend..."
+for i in {1..30}; do
+    if curl -s http://localhost:3001/api/health > /dev/null 2>&1; then
+        log "✅ Backend ready"
+        break
+    fi
+    sleep 1
+done
+
+# Check backend
+if ! ps -p $BACKEND_PID > /dev/null 2>&1; then
+    log "❌ Backend failed to start"
+    log "Error:"
+    tail -20 "$LOG_FILE"
+    exit 1
+fi
+
+# Start frontend
+log "🎨 Starting frontend..."
+cd "$APP_DIR/frontend"
+"$NPM_BIN" run dev >> "$LOG_FILE" 2>&1 &
+echo $! > /tmp/agentx-frontend.pid
+FRONTEND_PID=$!
+cd "$APP_DIR"
+log "   PID: $FRONTEND_PID"
+
+# Wait for frontend
+log "⏳ Waiting for frontend..."
+sleep 15
+
+# Start Electron
+log "⚛️ Starting Electron..."
+"$NODE_BIN" node_modules/.bin/electron electron-main.cjs >> "$LOG_FILE" 2>&1 &
+echo $! > /tmp/agentx-electron.pid
+ELECTRON_PID=$!
+log "   PID: $ELECTRON_PID"
+
+log "✨ AgentX started!"
+
+# Wait for Electron
+wait $ELECTRON_PID
+
+# Cleanup
+log "🛑 Shutting down..."
+kill $BACKEND_PID $FRONTEND_PID 2>/dev/null || true
+rm -f /tmp/agentx-*.pid
