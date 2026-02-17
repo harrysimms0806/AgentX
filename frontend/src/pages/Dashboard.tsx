@@ -26,6 +26,8 @@ import { TaskCard } from '../components/TaskCard';
 import { TaskModal } from '../components/TaskModal';
 import { ActivityFeed } from '../components/ActivityFeed';
 import { SystemHealthMonitor } from '../components/SystemHealthMonitor';
+import { HelpTooltip, InlineHelpIcon } from '../components/HelpTooltip';
+import { FeatureDiscoveryBadge } from '../components/HelpTooltip';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { createProject, createTask, getAgents, getProjects, getStats, getTasks } from '../utils/api';
 import { useAppStore } from '../stores/appStore';
@@ -154,7 +156,15 @@ export function Dashboard() {
         className="mb-8 flex flex-wrap items-center justify-between gap-3"
       >
         <div>
+        <div className="flex items-center gap-2">
           <h1 className="text-3xl font-bold">Dashboard</h1>
+          <HelpTooltip
+            id="dashboard-overview"
+            title="Dashboard Overview"
+            description="View real-time stats, agent status, recent tasks, and system health. Use this page to monitor all activity at a glance."
+            placement="right"
+          />
+        </div>
           <div className="flex items-center gap-2 mt-1">
             <span className={cn(
               "w-2 h-2 rounded-full",
@@ -226,7 +236,15 @@ export function Dashboard() {
           >
             <div className="flex items-start justify-between">
               <div>
-                <p className="text-sm text-foreground-secondary">{card.label}</p>
+                <div className="flex items-center gap-1">
+                  <p className="text-sm text-foreground-secondary">{card.label}</p>
+                  {card.label === 'Active Agents' && (
+                    <InlineHelpIcon 
+                      title="Active Agents"
+                      description="Agents currently running and available to process tasks. Click to view all agents."
+                    />
+                  )}
+                </div>
                 <p className="text-3xl font-bold mt-1">{card.value}</p>
                 {card.trend && (
                   <div className={cn(
@@ -574,6 +592,12 @@ export function Dashboard() {
           transition={{ delay: 0.6 }}
           className="xl:col-span-1"
         >
+          <div className="flex items-center gap-2 mb-2">
+            <FeatureDiscoveryBadge 
+              featureId="system-health-v1" 
+              featureName="System Health Monitor" 
+            />
+          </div>
           <SystemHealthMonitor />
         </motion.section>
 

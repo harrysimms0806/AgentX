@@ -6,6 +6,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '../utils/cn';
 import { useWorkflowStore, type WorkflowNode, type Workflow } from '../stores/workflowStore';
+import { useRecentStore } from '../stores/recentStore';
 import { generateId } from '../utils/id';
 
 // Node type definitions
@@ -73,6 +74,19 @@ export function Workflows() {
     addExecution, updateExecution
   } = useWorkflowStore();
   
+  const { addRecentItem } = useRecentStore();
+
+  // Track page view
+  useEffect(() => {
+    addRecentItem({
+      id: 'page-workflows',
+      type: 'workflow',
+      title: 'Workflows',
+      subtitle: `${workflows.length} workflows`,
+      path: '/workflows',
+    });
+  }, [addRecentItem, workflows.length]);
+
   // Initialize with sample workflows if empty
   useEffect(() => {
     if (workflows.length === 0) {
