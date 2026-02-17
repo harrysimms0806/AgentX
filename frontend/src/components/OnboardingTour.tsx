@@ -36,32 +36,39 @@ export function OnboardingTour() {
   const isLastStep = currentStep === tourSteps.length - 1;
   const progress = ((currentStep + 1) / tourSteps.length) * 100;
 
-  // Auto-start tour for first-time users
+  // Auto-start tour for first-time users (once only)
+  const hasAutoStarted = useRef(false);
   useEffect(() => {
-    if (!hasCompletedTour && !isTourActive) {
+    if (!hasCompletedTour && !isTourActive && !hasAutoStarted.current) {
+      hasAutoStarted.current = true;
       const timer = setTimeout(() => {
         setTourActive(true);
-      }, 1500);
+      }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [hasCompletedTour, isTourActive, setTourActive]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Navigation logic for tour steps
+  const navigationTimer = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => {
-    if (!isTourActive) return;
-    
+    if (!isTourActive || isNavigating) return;
+
     const routeMap: Record<string, string> = {
       'agents': '/agents',
       'workflows': '/workflows',
     };
 
     const targetRoute = routeMap[step.id];
-    if (targetRoute && location.pathname !== targetRoute && !isNavigating) {
+    if (targetRoute && location.pathname !== targetRoute) {
       setIsNavigating(true);
       navigate(targetRoute);
-      setTimeout(() => setIsNavigating(false), 300);
+      navigationTimer.current = setTimeout(() => setIsNavigating(false), 500);
     }
-  }, [currentStep, isTourActive, location.pathname, navigate, step.id, isNavigating]);
+
+    return () => {
+      if (navigationTimer.current) clearTimeout(navigationTimer.current);
+    };
+  }, [currentStep, isTourActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Calculate spotlight position
   const calculateSpotlight = useCallback(() => {

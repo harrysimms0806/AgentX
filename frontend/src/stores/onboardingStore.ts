@@ -127,9 +127,10 @@ export const useOnboardingStore = create<OnboardingState>()(
         currentStep: 0 
       }),
       
-      skipTour: () => set({ 
-        isTourActive: false, 
-        currentStep: 0 
+      skipTour: () => set({
+        hasCompletedTour: true,
+        isTourActive: false,
+        currentStep: 0
       }),
     }),
     {
