@@ -182,6 +182,8 @@ const shortcuts: ShortcutCategory[] = [
       { keys: ['?'], description: 'Show keyboard shortcuts' },
       { keys: ['Esc'], description: 'Close modal/palette' },
       { keys: ['⌘', '⇧', 'L'], description: 'Toggle dark mode' },
+      { keys: ['⌘', '⇧', 'R'], description: 'Recent & Favorites' },
+      { keys: ['⌘', '⇧', 'N'], description: 'Notifications' },
     ],
   },
   {

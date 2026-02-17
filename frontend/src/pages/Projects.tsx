@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Plus, FolderGit2, GitBranch, Clock, Trash2 } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
+import { useRecentStore } from '../stores/recentStore';
 import { getProjects, createProject, deleteProject } from '../utils/api';
 import { cn } from '../utils/cn';
 import type { Project } from '../types/index.js';
 
 export function Projects() {
   const { projects, activeProject, setProjects, setActiveProject, addProject, removeProject } = useAppStore();
+  const { addRecentItem } = useRecentStore();
   const [showModal, setShowModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -21,6 +23,17 @@ export function Projects() {
     '#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b',
     '#10b981', '#ef4444', '#06b6d4', '#6366f1',
   ];
+
+  // Track page view
+  useEffect(() => {
+    addRecentItem({
+      id: 'page-projects',
+      type: 'project',
+      title: 'Projects',
+      subtitle: `${projects.length} projects`,
+      path: '/projects',
+    });
+  }, [addRecentItem, projects.length]);
 
   useEffect(() => {
     setLoading(true);

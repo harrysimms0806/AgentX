@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Plus, Bot, Sparkles, Shield, Code, Search } from 'lucide-react';
 import { AgentCard } from '../components/AgentCard';
 import { useAppStore } from '../stores/appStore';
+import { useRecentStore } from '../stores/recentStore';
 import { getAgents, createAgent, deleteAgent } from '../utils/api';
 import { toast } from '../components/Toast';
 import type { Agent } from '../types/index.js';
@@ -16,6 +17,7 @@ const agentTemplates = [
 
 export function Agents() {
   const { agents, setAgents, addAgent, removeAgent } = useAppStore();
+  const { addRecentItem } = useRecentStore();
   const [showModal, setShowModal] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -28,6 +30,17 @@ export function Agents() {
     model: 'gpt-4o',
     capabilities: [] as string[],
   });
+
+  // Track page view
+  useEffect(() => {
+    addRecentItem({
+      id: 'page-agents',
+      type: 'agent',
+      title: 'Agents',
+      subtitle: `${agents.length} agents`,
+      path: '/agents',
+    });
+  }, [addRecentItem, agents.length]);
 
   useEffect(() => {
     getAgents().then(setAgents);

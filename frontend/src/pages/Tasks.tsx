@@ -7,6 +7,7 @@ import {
 import { TaskModal } from '../components/TaskModal';
 import { BulkOperations } from '../components/BulkOperations';
 import { useAppStore } from '../stores/appStore';
+import { useRecentStore } from '../stores/recentStore';
 import { toast } from '../components/Toast';
 import { 
   getTasks, getAgents, getProjects, createTask, 
@@ -38,6 +39,18 @@ export function Tasks() {
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [selectedTasks, setSelectedTasks] = useState<Set<string>>(new Set());
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const { addRecentItem } = useRecentStore();
+
+  // Track page view
+  useEffect(() => {
+    addRecentItem({
+      id: 'page-tasks',
+      type: 'task',
+      title: 'Tasks',
+      subtitle: `${tasks.length} tasks`,
+      path: '/tasks',
+    });
+  }, [addRecentItem, tasks.length]);
 
   useEffect(() => {
     loadData();

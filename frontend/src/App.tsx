@@ -6,6 +6,8 @@ import { ToastContainer, KeyboardShortcutsHelp } from './components/Toast';
 import { OnboardingTour } from './components/OnboardingTour';
 import { NotificationCenter } from './components/NotificationCenter';
 import { QuickActions } from './components/QuickActions';
+import { RecentFavorites } from './components/RecentFavorites';
+import { ContextualHelpWidget } from './components/ContextualHelpWidget';
 import { Dashboard } from './pages/Dashboard';
 import { Agents } from './pages/Agents';
 import { Tasks } from './pages/Tasks';
@@ -18,6 +20,7 @@ import { Analytics } from './pages/Analytics';
 import { SettingsPage } from './pages/Settings';
 import { useAppStore } from './stores/appStore';
 import { useNotificationStore } from './stores/notificationStore';
+import { useRecentStore } from './stores/recentStore';
 import { useKeyboardShortcuts, useSystemTheme, getSystemTheme, type KeySequence } from './hooks/useKeyboardShortcuts';
 import { getAgents, getProjects, getTasks } from './utils/api';
 
@@ -26,6 +29,7 @@ function AppContent() {
   const location = useLocation();
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const { togglePanel: toggleNotificationPanel } = useNotificationStore();
+  const { togglePanel: toggleRecentPanel } = useRecentStore();
   
   const { 
     sidebarCollapsed, 
@@ -117,6 +121,10 @@ function AppContent() {
     // Notification Panel
     { id: 'notifications', keys: ['Meta', 'Shift', 'n'], handler: toggleNotificationPanel, preventWhenTyping: true },
     { id: 'notifications-ctrl', keys: ['Control', 'Shift', 'n'], handler: toggleNotificationPanel, preventWhenTyping: true },
+    
+    // Recent & Favorites Panel
+    { id: 'recent-favorites', keys: ['Meta', 'Shift', 'r'], handler: toggleRecentPanel, preventWhenTyping: true },
+    { id: 'recent-favorites-ctrl', keys: ['Control', 'Shift', 'r'], handler: toggleRecentPanel, preventWhenTyping: true },
   ];
 
   // Initialize keyboard shortcuts
@@ -185,6 +193,8 @@ function AppContent() {
       <Sidebar />
       <NotificationCenter />
       <QuickActions />
+      <RecentFavorites />
+      <ContextualHelpWidget />
       <CommandPalette open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} />
       <ToastContainer />
       <KeyboardShortcutsHelp />
