@@ -49,6 +49,12 @@ import agentControlRoutes from './routes/agentControl.js';
 import costRoutes from './routes/costs.js';
 import retryRoutes from './routes/retries.js';
 
+// TODO: New feature routes
+import agentWizardRoutes from './routes/agentWizard.js';
+import bulkRoutes from './routes/bulk.js';
+import searchRoutes from './routes/search.js';
+import exportImportRoutes from './routes/exportImport.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -182,6 +188,12 @@ app.use('/api/agents/control', agentControlRoutes);
 // P3: Cost tracking and retry routes
 app.use('/api/costs', costRoutes);
 app.use('/api/retries', retryRoutes);
+
+// TODO: New feature routes
+app.use('/api/agents/wizard', agentWizardRoutes);
+app.use('/api/bulk', bulkRoutes);
+app.use('/api/search', searchRoutes);
+app.use('/api/export', exportImportRoutes);
 
 // NEW: Enhanced security routes
 app.use('/api/simulate', simulateRoutes);
