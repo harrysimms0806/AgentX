@@ -21,14 +21,29 @@ interface CommandItem {
   keywords: string[];
 }
 
-export function CommandPalette() {
-  const [isOpen, setIsOpen] = useState(false);
+interface CommandPaletteProps {
+  open?: boolean;
+  onClose?: () => void;
+}
+
+export function CommandPalette({ open, onClose }: CommandPaletteProps) {
+  const [internalOpen, setInternalOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   
-  const { agents, tasks, projects } = useAppStore();
+  const { agents, tasks, projects, setTheme } = useAppStore();
+
+  // Use controlled or uncontrolled state
+  const isOpen = open !== undefined ? open : internalOpen;
+  const handleClose = () => {
+    if (onClose) {
+      onClose();
+    } else {
+      setInternalOpen(false);
+    }
+  };
 
   // Build command list
   const commands: CommandItem[] = [
@@ -39,7 +54,7 @@ export function CommandPalette() {
       subtitle: 'View system overview and stats',
       icon: Home,
       shortcut: 'G D',
-      action: () => { navigate('/'); setIsOpen(false); },
+      action: () => { navigate('/'); handleClose(); },
       category: 'Navigation',
       keywords: ['home', 'main', 'overview', 'stats'],
     },
@@ -49,7 +64,7 @@ export function CommandPalette() {
       subtitle: 'Manage AI agents',
       icon: Bot,
       shortcut: 'G A',
-      action: () => { navigate('/agents'); setIsOpen(false); },
+      action: () => { navigate('/agents'); handleClose(); },
       category: 'Navigation',
       keywords: ['agents', 'bots', 'ai'],
     },
@@ -59,7 +74,7 @@ export function CommandPalette() {
       subtitle: 'View task queue',
       icon: ListTodo,
       shortcut: 'G T',
-      action: () => { navigate('/tasks'); setIsOpen(false); },
+      action: () => { navigate('/tasks'); handleClose(); },
       category: 'Navigation',
       keywords: ['tasks', 'queue', 'jobs'],
     },
@@ -69,7 +84,7 @@ export function CommandPalette() {
       subtitle: 'Manage automation workflows',
       icon: WorkflowIcon,
       shortcut: 'G W',
-      action: () => { navigate('/workflows'); setIsOpen(false); },
+      action: () => { navigate('/workflows'); handleClose(); },
       category: 'Navigation',
       keywords: ['workflows', 'automation', 'flows'],
     },
@@ -79,7 +94,7 @@ export function CommandPalette() {
       subtitle: 'View all projects',
       icon: Folder,
       shortcut: 'G P',
-      action: () => { navigate('/projects'); setIsOpen(false); },
+      action: () => { navigate('/projects'); handleClose(); },
       category: 'Navigation',
       keywords: ['projects', 'folders', 'workspaces'],
     },
@@ -89,7 +104,7 @@ export function CommandPalette() {
       subtitle: 'Manage connected services',
       icon: Plug,
       shortcut: 'G I',
-      action: () => { navigate('/integrations'); setIsOpen(false); },
+      action: () => { navigate('/integrations'); handleClose(); },
       category: 'Navigation',
       keywords: ['integrations', 'services', 'apis', 'connections'],
     },
@@ -99,7 +114,7 @@ export function CommandPalette() {
       subtitle: 'View conversation history',
       icon: Brain,
       shortcut: 'G M',
-      action: () => { navigate('/memory'); setIsOpen(false); },
+      action: () => { navigate('/memory'); handleClose(); },
       category: 'Navigation',
       keywords: ['memory', 'history', 'conversations'],
     },
@@ -109,7 +124,7 @@ export function CommandPalette() {
       subtitle: 'View system logs',
       icon: ScrollText,
       shortcut: 'G L',
-      action: () => { navigate('/logs'); setIsOpen(false); },
+      action: () => { navigate('/logs'); handleClose(); },
       category: 'Navigation',
       keywords: ['logs', 'audit', 'history'],
     },
@@ -119,7 +134,7 @@ export function CommandPalette() {
       subtitle: 'Configure AgentX',
       icon: Settings,
       shortcut: 'G S',
-      action: () => { navigate('/settings'); setIsOpen(false); },
+      action: () => { navigate('/settings'); handleClose(); },
       category: 'Navigation',
       keywords: ['settings', 'config', 'preferences'],
     },
@@ -131,7 +146,7 @@ export function CommandPalette() {
       subtitle: 'Add a new AI agent',
       icon: Bot,
       shortcut: '⌘ ⇧ A',
-      action: () => { navigate('/agents'); setIsOpen(false); },
+      action: () => { navigate('/agents'); handleClose(); },
       category: 'Actions',
       keywords: ['create', 'new', 'agent', 'bot', 'add'],
     },
@@ -141,7 +156,7 @@ export function CommandPalette() {
       subtitle: 'Add a task to the queue',
       icon: Plus,
       shortcut: '⌘ ⇧ T',
-      action: () => { navigate('/tasks'); setIsOpen(false); },
+      action: () => { navigate('/tasks'); handleClose(); },
       category: 'Actions',
       keywords: ['create', 'new', 'task', 'job', 'add'],
     },
@@ -151,7 +166,7 @@ export function CommandPalette() {
       subtitle: 'Create a new workspace',
       icon: Folder,
       shortcut: '⌘ ⇧ P',
-      action: () => { navigate('/projects'); setIsOpen(false); },
+      action: () => { navigate('/projects'); handleClose(); },
       category: 'Actions',
       keywords: ['create', 'new', 'project', 'workspace', 'add'],
     },
@@ -161,7 +176,7 @@ export function CommandPalette() {
       subtitle: 'Build automation',
       icon: WorkflowIcon,
       shortcut: '⌘ ⇧ W',
-      action: () => { navigate('/workflows'); setIsOpen(false); },
+      action: () => { navigate('/workflows'); handleClose(); },
       category: 'Actions',
       keywords: ['create', 'new', 'workflow', 'automation', 'add'],
     },
@@ -170,23 +185,39 @@ export function CommandPalette() {
     {
       id: 'quick-toggle-theme',
       title: 'Toggle Dark Mode',
-      subtitle: 'Switch between light and dark theme',
+      subtitle: 'Cycle through light, dark, and system theme',
       icon: Moon,
       shortcut: '⌘ ⇧ L',
       action: () => {
         const html = document.documentElement;
-        const isDark = html.classList.contains('dark');
-        if (isDark) {
-          html.classList.remove('dark');
-          toast.info('Theme changed: Light mode enabled');
-        } else {
+        const currentTheme = useAppStore.getState().theme;
+        
+        // Cycle through themes
+        const themes: Array<'light' | 'dark' | 'system'> = ['light', 'dark', 'system'];
+        const currentIndex = themes.indexOf(currentTheme);
+        const nextTheme = themes[(currentIndex + 1) % themes.length];
+        
+        setTheme(nextTheme);
+        
+        // Apply immediately
+        if (nextTheme === 'system') {
+          const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          if (systemPrefersDark) {
+            html.classList.add('dark');
+          } else {
+            html.classList.remove('dark');
+          }
+        } else if (nextTheme === 'dark') {
           html.classList.add('dark');
-          toast.info('Theme changed: Dark mode enabled');
+        } else {
+          html.classList.remove('dark');
         }
-        setIsOpen(false);
+        
+        toast.info(`Theme set to: ${nextTheme}`);
+        handleClose();
       },
       category: 'Quick Actions',
-      keywords: ['theme', 'dark', 'light', 'mode', 'toggle', 'night'],
+      keywords: ['theme', 'dark', 'light', 'mode', 'toggle', 'night', 'system'],
     },
     {
       id: 'quick-refresh',
@@ -208,7 +239,7 @@ export function CommandPalette() {
       icon: Keyboard,
       shortcut: '?',
       action: () => {
-        setIsOpen(false);
+        handleClose();
         // The KeyboardShortcutsHelp component listens for ? key
         // We'll simulate that
         window.dispatchEvent(new KeyboardEvent('keydown', { key: '?' }));
@@ -225,7 +256,7 @@ export function CommandPalette() {
       title: agent.name,
       subtitle: `Agent • ${agent.provider}`,
       icon: Bot,
-      action: () => { navigate('/agents'); setIsOpen(false); },
+      action: () => { navigate('/agents'); handleClose(); },
       category: 'Agents',
       keywords: ['agent', agent.name.toLowerCase(), agent.provider.toLowerCase()],
     })),
@@ -235,7 +266,7 @@ export function CommandPalette() {
       title: task.title,
       subtitle: `Task • ${task.status}`,
       icon: FileText,
-      action: () => { navigate('/tasks'); setIsOpen(false); },
+      action: () => { navigate('/tasks'); handleClose(); },
       category: 'Tasks',
       keywords: ['task', task.title.toLowerCase(), task.status.toLowerCase()],
     })),
@@ -245,7 +276,7 @@ export function CommandPalette() {
       title: project.name,
       subtitle: 'Project',
       icon: Folder,
-      action: () => { navigate('/projects'); setIsOpen(false); },
+      action: () => { navigate('/projects'); handleClose(); },
       category: 'Projects',
       keywords: ['project', project.name.toLowerCase()],
     })),
@@ -272,70 +303,56 @@ export function CommandPalette() {
   const categories = Object.keys(groupedCommands);
   const flatCommands = categories.flatMap(cat => groupedCommands[cat]);
 
-  // Keyboard shortcuts
+  // Internal keyboard handler for when not controlled externally
   useEffect(() => {
+    // If controlled externally, don't handle Cmd+K internally
+    if (open !== undefined) return;
+
     const handleKeyDown = (e: KeyboardEvent) => {
       // Cmd+K or Ctrl+K to open
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
-        setIsOpen(true);
-      }
-      
-      // Escape to close
-      if (e.key === 'Escape') {
-        setIsOpen(false);
-      }
-      
-      // Navigation shortcuts when open
-      if (isOpen) {
-        if (e.key === 'ArrowDown') {
-          e.preventDefault();
-          setSelectedIndex(prev => (prev + 1) % flatCommands.length);
-        }
-        if (e.key === 'ArrowUp') {
-          e.preventDefault();
-          setSelectedIndex(prev => (prev - 1 + flatCommands.length) % flatCommands.length);
-        }
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          const selected = flatCommands[selectedIndex];
-          if (selected) {
-            selected.action();
-          }
-        }
-      }
-      
-      // Quick navigation: G + letter
-      if (!isOpen && e.key.toLowerCase() === 'g') {
-        const navKeys: Record<string, string> = {
-          'd': '/',
-          'a': '/agents',
-          't': '/tasks',
-          'w': '/workflows',
-          'p': '/projects',
-          'i': '/integrations',
-          'm': '/memory',
-          'l': '/logs',
-          's': '/settings',
-        };
-        
-        const handler = (ev: KeyboardEvent) => {
-          const path = navKeys[ev.key.toLowerCase()];
-          if (path) {
-            ev.preventDefault();
-            navigate(path);
-          }
-          window.removeEventListener('keydown', handler);
-        };
-        
-        window.addEventListener('keydown', handler, { once: true });
-        setTimeout(() => window.removeEventListener('keydown', handler), 500);
+        setInternalOpen(true);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, flatCommands, selectedIndex, navigate]);
+  }, [open]);
+
+  // Handle navigation when palette is open
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Escape to close
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleClose();
+        return;
+      }
+      
+      // Navigation
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedIndex(prev => (prev + 1) % flatCommands.length);
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedIndex(prev => (prev - 1 + flatCommands.length) % flatCommands.length);
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const selected = flatCommands[selectedIndex];
+        if (selected) {
+          selected.action();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, flatCommands, selectedIndex]);
 
   // Focus input when opened
   useEffect(() => {
@@ -367,14 +384,16 @@ export function CommandPalette() {
 
   return (
     <>
-      {/* Command button in header or floating */}
-      <button
-        onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 left-6 z-40 p-3 rounded-full glass-card hover:shadow-lg transition-all group"
-        title="Command Palette (⌘K)"
-      >
-        <Command className="w-5 h-5 text-foreground-secondary group-hover:text-accent transition-colors" />
-      </button>
+      {/* Command button - only show when not controlled externally */}
+      {open === undefined && (
+        <button
+          onClick={() => setInternalOpen(true)}
+          className="fixed bottom-6 left-6 z-40 p-3 rounded-full glass-card hover:shadow-lg transition-all group"
+          title="Command Palette (⌘K)"
+        >
+          <Command className="w-5 h-5 text-foreground-secondary group-hover:text-accent transition-colors" />
+        </button>
+      )}
 
       <AnimatePresence>
         {isOpen && (
@@ -384,7 +403,7 @@ export function CommandPalette() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setIsOpen(false)}
+              onClick={handleClose}
               className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50"
             />
 
@@ -408,7 +427,7 @@ export function CommandPalette() {
                     className="flex-1 bg-transparent border-none outline-none text-lg placeholder:text-foreground-secondary"
                   />
                   <button
-                    onClick={() => setIsOpen(false)}
+                    onClick={handleClose}
                     className="p-1 rounded hover:bg-background-secondary dark:hover:bg-background-secondary-dark"
                   >
                     <X className="w-4 h-4 text-foreground-secondary" />
@@ -440,7 +459,7 @@ export function CommandPalette() {
                                   key={cmd.id}
                                   onClick={() => {
                                     cmd.action();
-                                    setIsOpen(false);
+                                    handleClose();
                                   }}
                                   onMouseEnter={() => setSelectedIndex(globalIndex)}
                                   className={cn(
