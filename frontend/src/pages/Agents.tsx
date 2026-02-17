@@ -83,7 +83,7 @@ export function Agents() {
   };
 
   return (
-    <div className="p-6">
+    <div data-tour="agents-page" className="p-6">
       <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold">Agents</h1>

@@ -1,10 +1,11 @@
 import { useEffect, useState, useRef } from 'react';
-import { Settings, RefreshCw, CheckCircle2, AlertCircle, FileJson, Shield, Users, Download, Upload, Database } from 'lucide-react';
+import { Settings, RefreshCw, CheckCircle2, AlertCircle, FileJson, Shield, Users, Download, Upload, Database, Sparkles } from 'lucide-react';
 import { getConfigHealth } from '../utils/api';
 import { cn } from '../utils/cn';
 import { toast } from '../components/Toast';
 import { useAppStore } from '../stores/appStore';
 import { useWorkflowStore } from '../stores/workflowStore';
+import { useOnboardingStore } from '../stores/onboardingStore';
 
 interface ConfigHealth {
   loaded: boolean;
@@ -17,6 +18,12 @@ export function SettingsPage() {
   const [health, setHealth] = useState<ConfigHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'general' | 'agents' | 'security'>('general');
+  const { resetTour } = useOnboardingStore();
+
+  const handleRestartTour = () => {
+    resetTour();
+    toast.success('Tour restarted! Starting from the beginning...');
+  };
 
   useEffect(() => {
     loadHealth();
@@ -179,6 +186,23 @@ export function SettingsPage() {
                   <option value="30">30 seconds</option>
                   <option value="60">1 minute</option>
                 </select>
+              </div>
+
+              <div className="flex items-center justify-between pt-4 border-t border-glass-border dark:border-glass-border-dark">
+                <div>
+                  <label className="font-medium flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-accent" />
+                    Onboarding Tour
+                  </label>
+                  <p className="text-sm text-foreground-secondary">Restart the guided tour to learn about AgentX features</p>
+                </div>
+                <button
+                  onClick={handleRestartTour}
+                  className="btn-apple-secondary flex items-center gap-2"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  Restart Tour
+                </button>
               </div>
             </div>
           </section>

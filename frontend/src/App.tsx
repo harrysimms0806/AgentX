@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Navigate, Route, Routes, useNavigate, useLocat
 import { Sidebar } from './components/Sidebar';
 import { CommandPalette } from './components/CommandPalette';
 import { ToastContainer, KeyboardShortcutsHelp } from './components/Toast';
+import { OnboardingTour } from './components/OnboardingTour';
 import { Dashboard } from './pages/Dashboard';
 import { Agents } from './pages/Agents';
 import { Tasks } from './pages/Tasks';
@@ -172,6 +173,7 @@ function AppContent() {
 
   return (
     <div className="min-h-screen bg-background dark:bg-background-dark text-foreground dark:text-foreground-dark transition-colors duration-300">
+      <OnboardingTour />
       <Sidebar />
       <CommandPalette open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} />
       <ToastContainer />

@@ -263,7 +263,7 @@ export function Workflows() {
   const getNodeTypeConfig = (type: string) => nodeTypes.find(nt => nt.type === type) || nodeTypes[0];
 
   return (
-    <div className="h-screen flex flex-col bg-background dark:bg-background-dark">
+    <div data-tour="workflows-page" className="h-screen flex flex-col bg-background dark:bg-background-dark">
       {/* Header */}
       <header className="flex items-center justify-between px-6 py-4 border-b border-glass-border dark:border-glass-border-dark">
         <div className="flex items-center gap-4">

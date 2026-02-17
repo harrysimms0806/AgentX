@@ -179,6 +179,7 @@ export function Dashboard() {
 
       {/* Stats Cards */}
       <motion.div 
+        data-tour="dashboard-stats"
         variants={containerVariants}
         initial="hidden"
         animate="visible"
