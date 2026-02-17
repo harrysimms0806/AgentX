@@ -10,6 +10,7 @@ import { Projects } from './pages/Projects';
 import { Integrations } from './pages/Integrations';
 import { Memory } from './pages/Memory';
 import { Logs } from './pages/Logs';
+import { Analytics } from './pages/Analytics';
 import { SettingsPage } from './pages/Settings';
 import { useAppStore } from './stores/appStore';
 
@@ -32,6 +33,7 @@ function AppLayout() {
           <Route path="/integrations" element={<Integrations />} />
           <Route path="/memory" element={<Memory />} />
           <Route path="/logs" element={<Logs />} />
+          <Route path="/analytics" element={<Analytics />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

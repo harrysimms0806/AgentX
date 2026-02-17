@@ -31,6 +31,7 @@ import approvalRoutes from './routes/approvals.js';
 import auditRoutes from './routes/audit.js';
 import simulateRoutes from './routes/simulate.js';
 import rbacRoutes from './routes/rbac.js';
+import analyticsRoutes from './routes/analytics.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -136,6 +137,7 @@ app.use('/api/config', configRoutes);
 app.use('/api/policy', policyRoutes);
 app.use('/api/approvals', approvalRoutes);
 app.use('/api/audit', auditRoutes);
+app.use('/api/analytics', analyticsRoutes);
 
 // NEW: Enhanced security routes
 app.use('/api/simulate', simulateRoutes);

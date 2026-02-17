@@ -1,24 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  X, CheckCircle, AlertCircle, Info, AlertTriangle,
-  Command, Keyboard
-} from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { AlertTriangle, CheckCircle, Command, Info, Keyboard, X, XCircle } from 'lucide-react';
 import { cn } from '../utils/cn';
+import { type Toast, type ToastType, useToastStore } from '../stores/toastStore';
 
-export type ToastType = 'success' | 'error' | 'info' | 'warning';
-
-export interface Toast {
-  id: string;
-  title: string;
-  description?: string;
-  type: ToastType;
-  duration?: number;
-  action?: {
-    label: string;
-    onClick: () => void;
-  };
-}
+type ToastInput = Omit<Toast, 'id'> & { id?: string };
 
 interface ToastItemProps {
   toast: Toast;
@@ -27,143 +13,152 @@ interface ToastItemProps {
 
 const iconMap: Record<ToastType, React.ElementType> = {
   success: CheckCircle,
-  error: AlertCircle,
+  error: XCircle,
   info: Info,
   warning: AlertTriangle,
 };
 
-const colorMap: Record<ToastType, string> = {
-  success: 'text-green-500 bg-green-500/10 border-green-500/20',
-  error: 'text-red-500 bg-red-500/10 border-red-500/20',
-  info: 'text-blue-500 bg-blue-500/10 border-blue-500/20',
-  warning: 'text-amber-500 bg-amber-500/10 border-amber-500/20',
+const colorMap: Record<ToastType, { accent: string; iconWrap: string; progress: string }> = {
+  success: {
+    accent: 'text-green-600 dark:text-green-400 border-green-400/30',
+    iconWrap: 'bg-green-500/15 text-green-600 dark:text-green-400',
+    progress: 'bg-green-500',
+  },
+  error: {
+    accent: 'text-red-600 dark:text-red-400 border-red-400/30',
+    iconWrap: 'bg-red-500/15 text-red-600 dark:text-red-400',
+    progress: 'bg-red-500',
+  },
+  info: {
+    accent: 'text-blue-600 dark:text-blue-400 border-blue-400/30',
+    iconWrap: 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
+    progress: 'bg-blue-500',
+  },
+  warning: {
+    accent: 'text-amber-600 dark:text-amber-400 border-amber-400/30',
+    iconWrap: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
+    progress: 'bg-amber-500',
+  },
 };
 
 function ToastItem({ toast, onDismiss }: ToastItemProps) {
   const Icon = iconMap[toast.type];
   const colors = colorMap[toast.type];
-
-  useEffect(() => {
-    if (toast.duration !== Infinity) {
-      const timer = setTimeout(() => {
-        onDismiss(toast.id);
-      }, toast.duration || 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [toast.id, toast.duration, onDismiss]);
+  const duration = toast.duration ?? 4000;
 
   return (
     <motion.div
       layout
-      initial={{ opacity: 0, y: 20, scale: 0.95 }}
+      initial={{ opacity: 0, y: 18, scale: 0.97 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, x: 100, scale: 0.95 }}
+      exit={{ opacity: 0, y: 10, scale: 0.96 }}
+      transition={{ duration: 0.2, ease: 'easeOut' }}
       className={cn(
-        'w-full max-w-sm p-4 rounded-xl border shadow-lg backdrop-blur-xl',
-        'bg-glass-light/95 dark:bg-glass-dark/95',
-        'border-glass-border dark:border-glass-border-dark',
-        colors
+        'glass-card relative w-full max-w-sm overflow-hidden p-4 shadow-xl',
+        'bg-glass-light/90 dark:bg-glass-dark/90 border',
+        colors.accent
       )}
     >
       <div className="flex items-start gap-3">
-        <div className={cn('p-2 rounded-lg', colors)}>
-          <Icon className="w-5 h-5" />
+        <div className={cn('rounded-xl p-2', colors.iconWrap)}>
+          <Icon className="h-5 w-5" />
         </div>
-        
-        <div className="flex-1 min-w-0">
-          <p className="font-medium text-foreground dark:text-foreground-dark">
-            {toast.title}
-          </p>
-          {toast.description && (
-            <p className="text-sm text-foreground-secondary mt-1">
-              {toast.description}
-            </p>
-          )}
-          {toast.action && (
+
+        <div className="min-w-0 flex-1 pr-2">
+          <p className="text-sm font-medium text-foreground dark:text-foreground-dark">{toast.message}</p>
+          {toast.action ? (
             <button
+              type="button"
               onClick={() => {
                 toast.action?.onClick();
                 onDismiss(toast.id);
               }}
-              className="text-sm font-medium mt-2 hover:underline"
+              className="mt-2 text-xs font-semibold text-accent hover:underline"
             >
               {toast.action.label}
             </button>
-          )}
+          ) : null}
         </div>
 
         <button
+          type="button"
           onClick={() => onDismiss(toast.id)}
-          className="p-1 rounded hover:bg-background-secondary dark:hover:bg-background-secondary-dark transition-colors"
+          aria-label="Dismiss toast"
+          className="rounded-md p-1 text-foreground-secondary transition-colors hover:bg-background-secondary/70 dark:hover:bg-background-secondary-dark/70"
         >
-          <X className="w-4 h-4 text-foreground-secondary" />
+          <X className="h-4 w-4" />
         </button>
       </div>
+
+      {Number.isFinite(duration) && duration > 0 ? (
+        <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-background-secondary/70 dark:bg-background-secondary-dark/70">
+          <motion.div
+            className={cn('h-full', colors.progress)}
+            initial={{ width: '100%' }}
+            animate={{ width: '0%' }}
+            transition={{ duration: duration / 1000, ease: 'linear' }}
+          />
+        </div>
+      ) : null}
     </motion.div>
   );
 }
 
-// Global toast state
-let toastListeners: ((toasts: Toast[]) => void)[] = [];
-let toasts: Toast[] = [];
+export function useToast() {
+  const addToast = useToastStore((state) => state.addToast);
+  const removeToast = useToastStore((state) => state.removeToast);
+  const clearAll = useToastStore((state) => state.clearAll);
 
-const notifyListeners = () => {
-  toastListeners.forEach(listener => listener([...toasts]));
-};
+  return useMemo(
+    () => ({
+      addToast,
+      removeToast,
+      clearAll,
+      success: (message: string, options?: Omit<ToastInput, 'type' | 'message'>) =>
+        addToast({ type: 'success', message, ...options }),
+      error: (message: string, options?: Omit<ToastInput, 'type' | 'message'>) =>
+        addToast({ type: 'error', message, ...options }),
+      info: (message: string, options?: Omit<ToastInput, 'type' | 'message'>) =>
+        addToast({ type: 'info', message, ...options }),
+      warning: (message: string, options?: Omit<ToastInput, 'type' | 'message'>) =>
+        addToast({ type: 'warning', message, ...options }),
+    }),
+    [addToast, clearAll, removeToast]
+  );
+}
 
 export const toast = {
-  success: (title: string, description?: string, options?: Partial<Omit<Toast, 'id' | 'title' | 'description' | 'type'>>) => {
-    const id = Math.random().toString(36).substring(2, 9);
-    toasts = [...toasts, { id, title, description, type: 'success', ...options }];
-    notifyListeners();
-    return id;
-  },
-  error: (title: string, description?: string, options?: Partial<Omit<Toast, 'id' | 'title' | 'description' | 'type'>>) => {
-    const id = Math.random().toString(36).substring(2, 9);
-    toasts = [...toasts, { id, title, description, type: 'error', ...options }];
-    notifyListeners();
-    return id;
-  },
-  info: (title: string, description?: string, options?: Partial<Omit<Toast, 'id' | 'title' | 'description' | 'type'>>) => {
-    const id = Math.random().toString(36).substring(2, 9);
-    toasts = [...toasts, { id, title, description, type: 'info', ...options }];
-    notifyListeners();
-    return id;
-  },
-  warning: (title: string, description?: string, options?: Partial<Omit<Toast, 'id' | 'title' | 'description' | 'type'>>) => {
-    const id = Math.random().toString(36).substring(2, 9);
-    toasts = [...toasts, { id, title, description, type: 'warning', ...options }];
-    notifyListeners();
-    return id;
-  },
-  dismiss: (id: string) => {
-    toasts = toasts.filter(t => t.id !== id);
-    notifyListeners();
-  },
+  addToast: (toastInput: ToastInput) => useToastStore.getState().addToast(toastInput),
+  removeToast: (id: string) => useToastStore.getState().removeToast(id),
+  clearAll: () => useToastStore.getState().clearAll(),
+  success: (message: string, options?: Omit<ToastInput, 'type' | 'message'>) =>
+    useToastStore.getState().addToast({ type: 'success', message, ...options }),
+  error: (message: string, options?: Omit<ToastInput, 'type' | 'message'>) =>
+    useToastStore.getState().addToast({ type: 'error', message, ...options }),
+  info: (message: string, options?: Omit<ToastInput, 'type' | 'message'>) =>
+    useToastStore.getState().addToast({ type: 'info', message, ...options }),
+  warning: (message: string, options?: Omit<ToastInput, 'type' | 'message'>) =>
+    useToastStore.getState().addToast({ type: 'warning', message, ...options }),
+  dismiss: (id: string) => useToastStore.getState().removeToast(id),
 };
 
 export function ToastContainer() {
-  const [localToasts, setLocalToasts] = useState<Toast[]>([]);
+  const toasts = useToastStore((state) => state.toasts);
+  const removeToast = useToastStore((state) => state.removeToast);
 
-  useEffect(() => {
-    const listener = (newToasts: Toast[]) => setLocalToasts(newToasts);
-    toastListeners.push(listener);
-    setLocalToasts([...toasts]);
-    return () => {
-      toastListeners = toastListeners.filter(l => l !== listener);
-    };
-  }, []);
-
-  const handleDismiss = useCallback((id: string) => {
-    toast.dismiss(id);
-  }, []);
+  const handleDismiss = useCallback(
+    (id: string) => {
+      removeToast(id);
+    },
+    [removeToast]
+  );
 
   return (
-    <div className="fixed bottom-6 right-6 z-[100] flex flex-col gap-3 pointer-events-none">
-      <AnimatePresence mode="popLayout">
-        {localToasts.map(t => (
-          <div key={t.id} className="pointer-events-auto">
-            <ToastItem toast={t} onDismiss={handleDismiss} />
+    <div className="pointer-events-none fixed bottom-6 right-6 z-[100] flex w-full max-w-sm flex-col gap-3">
+      <AnimatePresence mode="popLayout" initial={false}>
+        {toasts.map((toastItem) => (
+          <div key={toastItem.id} className="pointer-events-auto">
+            <ToastItem toast={toastItem} onDismiss={handleDismiss} />
           </div>
         ))}
       </AnimatePresence>
@@ -171,7 +166,6 @@ export function ToastContainer() {
   );
 }
 
-// Keyboard Shortcuts Help Panel
 interface ShortcutCategory {
   name: string;
   shortcuts: {
@@ -228,15 +222,13 @@ export function KeyboardShortcutsHelp() {
   const [isOpen, setIsOpen] = useState(false);
 
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // ? key to open help (not in input)
-      if (e.key === '?' && !['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) {
-        e.preventDefault();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === '?' && !['INPUT', 'TEXTAREA'].includes((event.target as HTMLElement).tagName)) {
+        event.preventDefault();
         setIsOpen(true);
       }
-      
-      // Close on escape
-      if (e.key === 'Escape') {
+
+      if (event.key === 'Escape') {
         setIsOpen(false);
       }
     };
@@ -247,40 +239,36 @@ export function KeyboardShortcutsHelp() {
 
   return (
     <>
-      {/* Help button */}
       <button
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 left-20 z-40 p-3 rounded-full glass-card hover:shadow-lg transition-all group"
+        className="fixed bottom-6 left-20 z-40 rounded-full glass-card p-3 transition-all hover:shadow-lg group"
         title="Keyboard shortcuts (?)"
       >
-        <Keyboard className="w-5 h-5 text-foreground-secondary group-hover:text-accent transition-colors" />
+        <Keyboard className="h-5 w-5 text-foreground-secondary transition-colors group-hover:text-accent" />
       </button>
 
       <AnimatePresence>
-        {isOpen && (
+        {isOpen ? (
           <>
-            {/* Backdrop */}
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setIsOpen(false)}
-              className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50"
+              className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm"
             />
 
-            {/* Modal */}
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="fixed inset-x-4 top-[5%] md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[700px] max-h-[90vh] z-50"
+              className="fixed inset-x-4 top-[5%] z-50 max-h-[90vh] md:left-1/2 md:w-[700px] md:-translate-x-1/2 md:inset-x-auto"
             >
-              <div className="glass-card overflow-hidden flex flex-col max-h-[90vh]">
-                {/* Header */}
-                <div className="flex items-center justify-between p-4 border-b border-glass-border dark:border-glass-border-dark">
+              <div className="glass-card flex max-h-[90vh] flex-col overflow-hidden">
+                <div className="flex items-center justify-between border-b border-glass-border p-4 dark:border-glass-border-dark">
                   <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-lg bg-accent/10">
-                      <Command className="w-5 h-5 text-accent" />
+                    <div className="rounded-lg bg-accent/10 p-2">
+                      <Command className="h-5 w-5 text-accent" />
                     </div>
                     <div>
                       <h2 className="text-lg font-semibold">Keyboard Shortcuts</h2>
@@ -289,34 +277,31 @@ export function KeyboardShortcutsHelp() {
                   </div>
                   <button
                     onClick={() => setIsOpen(false)}
-                    className="p-2 rounded-lg hover:bg-background-secondary dark:hover:bg-background-secondary-dark transition-colors"
+                    className="rounded-lg p-2 transition-colors hover:bg-background-secondary dark:hover:bg-background-secondary-dark"
                   >
-                    <X className="w-5 h-5 text-foreground-secondary" />
+                    <X className="h-5 w-5 text-foreground-secondary" />
                   </button>
                 </div>
 
-                {/* Content */}
-                <div className="overflow-y-auto flex-1 p-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="flex-1 overflow-y-auto p-6">
+                  <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
                     {shortcuts.map((category) => (
                       <div key={category.name}>
-                        <h3 className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider mb-3">
+                        <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-foreground-secondary">
                           {category.name}
                         </h3>
                         <div className="space-y-2">
-                          {category.shortcuts.map((shortcut, idx) => (
+                          {category.shortcuts.map((shortcut, index) => (
                             <div
-                              key={idx}
-                              className="flex items-center justify-between py-2 border-b border-glass-border/50 last:border-0"
+                              key={`${category.name}-${index}`}
+                              className="flex items-center justify-between border-b border-glass-border/50 py-2 last:border-0"
                             >
-                              <span className="text-sm text-foreground-secondary">
-                                {shortcut.description}
-                              </span>
+                              <span className="text-sm text-foreground-secondary">{shortcut.description}</span>
                               <div className="flex items-center gap-1">
-                                {shortcut.keys.map((key, keyIdx) => (
+                                {shortcut.keys.map((key, keyIndex) => (
                                   <kbd
-                                    key={keyIdx}
-                                    className="px-2 py-1 text-xs font-medium rounded bg-background-secondary dark:bg-background-secondary-dark border border-glass-border"
+                                    key={`${key}-${keyIndex}`}
+                                    className="rounded border border-glass-border bg-background-secondary px-2 py-1 text-xs font-medium dark:bg-background-secondary-dark"
                                   >
                                     {key}
                                   </kbd>
@@ -330,16 +315,15 @@ export function KeyboardShortcutsHelp() {
                   </div>
                 </div>
 
-                {/* Footer */}
-                <div className="px-6 py-4 border-t border-glass-border dark:border-glass-border-dark bg-background-secondary/50 dark:bg-background-secondary-dark/50">
-                  <p className="text-sm text-foreground-secondary text-center">
-                    Press <kbd className="px-1.5 py-0.5 rounded bg-background">?</kbd> anytime to show this help
+                <div className="border-t border-glass-border bg-background-secondary/50 px-6 py-4 dark:border-glass-border-dark dark:bg-background-secondary-dark/50">
+                  <p className="text-center text-sm text-foreground-secondary">
+                    Press <kbd className="rounded bg-background px-1.5 py-0.5">?</kbd> anytime to show this help
                   </p>
                 </div>
               </div>
             </motion.div>
           </>
-        )}
+        ) : null}
       </AnimatePresence>
     </>
   );
