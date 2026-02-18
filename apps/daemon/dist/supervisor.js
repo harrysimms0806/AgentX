@@ -445,6 +445,52 @@ class Supervisor {
         }
     }
     /**
+     * List all runs (public method for route encapsulation)
+     */
+    listRuns(projectId) {
+        let runs = Array.from(this.runs.values());
+        if (projectId) {
+            runs = runs.filter(r => r.projectId === projectId);
+        }
+        return runs.map(r => ({
+            id: r.id,
+            projectId: r.projectId,
+            type: r.type,
+            ownerAgentId: r.ownerAgentId,
+            status: r.status,
+            pid: r.pid,
+            timeoutMs: r.timeoutMs,
+            startedAt: r.startedAt,
+            endedAt: r.endedAt,
+            exitCode: r.exitCode,
+            logsPath: r.logsPath,
+            summary: r.summary,
+        }));
+    }
+    /**
+     * Cleanup old runs (public method for route encapsulation)
+     */
+    cleanupRuns(projectId, maxAgeMs = 24 * 60 * 60 * 1000) {
+        let cleaned = 0;
+        for (const run of this.runs.values()) {
+            // Clean up completed/error/killed runs older than maxAge
+            if (run.endedAt && run.status !== 'running') {
+                const endedTime = new Date(run.endedAt).getTime();
+                const age = Date.now() - endedTime;
+                if (age > maxAgeMs) {
+                    if (!projectId || run.projectId === projectId) {
+                        this.runs.delete(run.id);
+                        cleaned++;
+                    }
+                }
+            }
+        }
+        if (cleaned > 0) {
+            this.persistRuns();
+        }
+        return cleaned;
+    }
+    /**
      * Shutdown cleanup
      */
     async shutdown() {
