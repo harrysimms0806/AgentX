@@ -86,11 +86,12 @@ async function main() {
   await supervisor.initialize();
   
   // Write runtime config for UI discovery
+  // Schema versioned for backward compatibility
   const runtimeConfig = {
+    schemaVersion: '1.0',
     uiPort: config.uiPort,
     daemonPort: config.port,
     startedAt: new Date().toISOString(),
-    sandboxRoot: config.sandboxRoot,
   };
   
   const runtimeDir = path.join(os.homedir(), '.agentx');

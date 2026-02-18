@@ -79,11 +79,12 @@ async function main() {
     await audit_1.audit.initialize();
     await supervisor_1.supervisor.initialize();
     // Write runtime config for UI discovery
+    // Schema versioned for backward compatibility
     const runtimeConfig = {
+        schemaVersion: '1.0',
         uiPort: config_1.config.uiPort,
         daemonPort: config_1.config.port,
         startedAt: new Date().toISOString(),
-        sandboxRoot: config_1.config.sandboxRoot,
     };
     const runtimeDir = path_1.default.join(os_1.default.homedir(), '.agentx');
     if (!fs_1.default.existsSync(runtimeDir)) {

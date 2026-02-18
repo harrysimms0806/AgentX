@@ -7,6 +7,22 @@ const supervisor_1 = require("../supervisor");
 const audit_1 = require("../audit");
 const router = (0, express_1.Router)();
 exports.supervisorRouter = router;
+// POST /supervisor/runs - Create a new run
+router.post('/runs', (req, res) => {
+    const { projectId, type, timeoutMs } = req.body;
+    const clientId = req.session?.clientId || 'unknown';
+    if (!projectId || !type) {
+        res.status(400).json({ error: 'projectId and type required' });
+        return;
+    }
+    if (!['agent', 'command', 'git', 'index'].includes(type)) {
+        res.status(400).json({ error: 'Invalid type' });
+        return;
+    }
+    const run = supervisor_1.supervisor.createRun(projectId, type, clientId, timeoutMs);
+    audit_1.audit.log(projectId, 'user', 'RUN_CREATE', { runId: run.id, type, timeoutMs }, clientId);
+    res.status(201).json(run);
+});
 // GET /supervisor/runs - List all runs
 router.get('/runs', (req, res) => {
     const { projectId } = req.query;
@@ -17,6 +33,7 @@ router.get('/runs', (req, res) => {
         ownerAgentId: r.ownerAgentId,
         status: r.status,
         pid: r.pid,
+        timeoutMs: r.timeoutMs,
         startedAt: r.startedAt,
         endedAt: r.endedAt,
         exitCode: r.exitCode,
