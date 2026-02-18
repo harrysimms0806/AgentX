@@ -1,97 +1,89 @@
 ## Blockers (must fix before merge)
 
-- [ ] **Safe mode / capability model is not enforced for mutating filesystem endpoints**
+- [ ] **Daemon source does not compile (`tsc` fails) due duplicate supervisor methods**
   - **Why it’s a blocker**
-    - Phase 0 policy defaults projects to `safeMode: true` and `FS_WRITE: false`, but `PUT /fs/write`, `POST /fs/delete`, and `POST /fs/rename` still succeed under default settings.
-    - This violates the local safety boundary and undermines least-privilege expectations for later phases.
+    - Phase 0 must be mergeable and reproducible in dev; currently `npm run -w apps/daemon build` fails.
+    - This blocks reliable boot from source and indicates conflicting supervisor behavior at runtime.
   - **Where it is in code (file/function)**
-    - `apps/daemon/src/routes/filesystem.ts` (`canWrite()` always returns `{ allowed: true }` and is used by write route; delete/rename are effectively unchecked).
-    - `apps/daemon/src/routes/projects.ts` (`defaultSettings` sets `FS_WRITE: false` / `safeMode: true`, but FS routes do not enforce it).
+    - `apps/daemon/src/supervisor.ts` defines `listRuns` twice and `cleanupRuns` twice (duplicate class method implementations).
   - **Exact fix suggestion**
-    - Replace `canWrite()` placeholder with real project settings lookup and enforce deny-by-default for write/delete/rename when `safeMode` is true or `capabilities.FS_WRITE` is false.
-    - Return consistent `403` with explicit reason (`FS_WRITE disabled by policy`).
+    - Remove duplicate method pairs and keep a single canonical implementation for each.
+    - Add CI/typecheck gate to prevent duplicate method regressions.
 
-- [ ] **Supervisor safety controls are not verifiable end-to-end because no API path actually spawns processes**
+- [ ] **Signal handling can bypass supervisor shutdown, leaving process cleanup unreliable**
   - **Why it’s a blocker**
-    - Acceptance criterion **E** requires proving timeout, bounded output, kill escalation, and restart behavior on real spawned processes.
-    - Current daemon API can create/list/kill metadata runs, but cannot start a command through HTTP; `spawnCommand()` is unreachable from routes.
-    - As a result, runaway-process and log-rotation adversarial tests cannot be completed against the daemon boundary.
+    - `audit.ts` registers its own `SIGINT`/`SIGTERM` handlers that call `process.exit(0)` immediately.
+    - This can preempt `index.ts` graceful shutdown flow (`await supervisor.shutdown()`), violating Phase 0 process-supervision reliability (orphan/stale process risk).
   - **Where it is in code (file/function)**
-    - `apps/daemon/src/supervisor.ts` implements `spawnCommand()` + limits.
-    - `apps/daemon/src/routes/supervisor.ts` never calls `spawnCommand()`.
+    - `apps/daemon/src/audit.ts` (`process.on('SIGINT'|'SIGTERM', () => { audit.shutdown(); process.exit(0); })`).
+    - `apps/daemon/src/index.ts` graceful shutdown handlers assume they will run and await supervisor cleanup.
   - **Exact fix suggestion**
-    - Add a minimal, auth-protected execution route for Phase 0 validation only (sandboxed cwd, strict allowlist, audit event).
-    - Add integration tests that actually spawn long-running/noisy commands and assert timeout + SIGTERM→SIGKILL + buffer/log limits.
+    - Remove process-level signal handlers from `audit.ts`; keep shutdown orchestration in one place (`index.ts`).
+    - Leave `audit.shutdown()` as a callable cleanup primitive and invoke it from centralized shutdown path only.
 
-- [ ] **Audit durability gap: privileged actions are buffered and may be missing from immediate reads/crash windows**
+- [ ] **Supervisor run-detail endpoint leaks internal process state and massive buffers**
   - **Why it’s a blocker**
-    - Acceptance criterion **G** expects privileged actions to be recorded reliably.
-    - `FILE_WRITE`/`FILE_DELETE` are not in the immediate-flush list; reading `/audit` immediately after action can miss events until periodic flush, and a crash can lose buffered records.
+    - `GET /supervisor/runs/:id` returns the raw `RunRecord`, including `process` internals, full `outputBuffer`, and `logStream` metadata.
+    - In adversarial runs this can produce multi-megabyte responses and expose execution internals/env-derived data, harming audit/security boundaries.
   - **Where it is in code (file/function)**
-    - `apps/daemon/src/audit.ts` (`log()` only immediate-flushes `WRITE`, `DELETE`, `EXEC`; filesystem routes emit `FILE_WRITE`, `FILE_DELETE`, etc.).
+    - `apps/daemon/src/supervisor.ts` `getRun()` returns stored `RunRecord` object directly.
+    - `apps/daemon/src/routes/supervisor.ts` `GET /runs/:id` returns `run` verbatim.
   - **Exact fix suggestion**
-    - Flush immediately for all privileged action types (or write-through append for each event).
-    - At minimum, align flush trigger with actual emitted action names (`FILE_WRITE`, `FILE_DELETE`, `RUN_*`, auth/session actions).
-
-- [ ] **Auth coverage requirement is not fully met for potential websocket surface**
-  - **Why it’s a blocker**
-    - Acceptance criterion **B** explicitly includes websockets.
-    - There is documented WS policy in comments, but no implemented WS upgrade guard.
-    - This is a latent auth bypass risk once WS is introduced.
-  - **Where it is in code (file/function)**
-    - `apps/daemon/src/index.ts` (WS policy comments only; no upgrade/auth enforcement code).
-  - **Exact fix suggestion**
-    - Implement explicit WS auth on upgrade (reject missing/invalid bearer), or gate WS feature entirely until guard is implemented and tested.
+    - Return a sanitized DTO only (`id`, `projectId`, `type`, `status`, `pid`, timing, exitCode, summary, logsPath, timeoutMs).
+    - Keep output retrieval on `/runs/:id/output` with explicit line/size caps.
 
 ## High priority (fix now if quick)
 
-- [ ] **Protected route internals reach private supervisor state via bracket access**
+- [ ] **Kill-state race: killed runs are later marked as `error`**
   - **Why it’s high priority**
-    - `supervisor['runs']` / `supervisor['persistRuns']()` bypass class encapsulation and can break invariants as code evolves.
-    - This is especially risky in privileged cleanup paths.
+    - `killRun()` sets status `killed`, but `child.on('close')` overwrites status to `error` when exit code is non-zero/null.
+    - This corrupts supervisor state semantics and weakens incident/audit interpretation.
   - **Where it is in code (file/function)**
-    - `apps/daemon/src/routes/supervisor.ts` (list and cleanup routes).
+    - `apps/daemon/src/supervisor.ts` (`killRun()` + `child.on('close')` in `spawnCommand()`).
   - **Exact fix suggestion**
-    - Add public methods (`listRuns`, `cleanupRuns`, `persistState`) on supervisor and consume those from routes.
+    - In `close` handler, preserve terminal states (`killed`, `timeout`) and avoid overwriting them.
+    - Add a regression test for user kill and timeout kill state transitions.
 
-- [ ] **Bind-address verification is code-only, not test-enforced**
+- [ ] **Audit redaction is key-name based only; command arguments can still leak secrets**
   - **Why it’s high priority**
-    - Daemon appears to bind to loopback in code, but no automated guard prevents accidental regression to external bind.
+    - `RUN_SPAWN` logs raw `cmd`/`args`; secrets embedded positionally (tokens in CLI args) are not redacted because only object keys are matched.
   - **Where it is in code (file/function)**
-    - `apps/daemon/src/index.ts` (`app.listen(config.port, '127.0.0.1', ...)`).
+    - `apps/daemon/src/routes/supervisor.ts` logs `{ runId, cmd, args }`.
+    - `apps/daemon/src/audit.ts` `redactPayload()` redacts by key names only.
   - **Exact fix suggestion**
-    - Capture and assert listener address in smoke/integration tests; fail CI if non-loopback.
+    - Add value-pattern redaction for common token formats/flags (`--token=`, `Authorization`, etc.) before append.
+    - Prefer logging command metadata safely (command basename + arg count) unless debug mode is explicitly enabled.
 
-- [ ] **Auth consistency relies on mount discipline; no route-level lint/test guard**
+- [ ] **No automated adversarial test coverage for bind/auth/sandbox invariants in CI path**
   - **Why it’s high priority**
-    - Current protection works, but accidental future route mounting outside middleware could expose endpoints.
+    - Manual checks pass now, but these are security boundaries likely to regress.
   - **Where it is in code (file/function)**
-    - `apps/daemon/src/index.ts` route mount order and auth middleware composition.
+    - Existing tests under `apps/daemon/src/test/*` do not enforce the full acceptance matrix in automated build/test script.
   - **Exact fix suggestion**
-    - Add route-auth coverage tests (all non-`/health` endpoints require bearer).
+    - Add a single integration suite that asserts: loopback bind only, auth required on all protected routes, traversal/symlink escapes blocked, ws upgrade denied, and soft-delete audit emitted.
 
 ## Nice-to-haves / follow-up tickets
 
-- [ ] **Standardize sandbox error taxonomy and status mapping**
+- [ ] **Return structured error codes for policy denials**
   - **Why it’s a follow-up**
-    - Errors are clear, but API consumers would benefit from stable machine-readable codes.
+    - Messages are human-readable, but clients would benefit from stable machine-readable error codes.
   - **Where it is in code (file/function)**
-    - `apps/daemon/src/sandbox.ts` and `apps/daemon/src/routes/filesystem.ts`.
+    - `apps/daemon/src/sandbox.ts`, `apps/daemon/src/routes/filesystem.ts`, `apps/daemon/src/middleware/auth.ts`.
   - **Exact fix suggestion**
-    - Add `code` fields (`INVALID_PATH`, `ABSOLUTE_PATH_DENIED`, `OUTSIDE_SANDBOX`, etc.) and keep message text human-friendly.
+    - Add `code` fields (`AUTH_REQUIRED`, `PATH_TRAVERSAL`, `ABSOLUTE_PATH_DENIED`, `OUTSIDE_SANDBOX`, etc.).
 
-- [ ] **Harden audit file permissions and tamper evidence**
+- [ ] **Trim health payload to minimum operational info**
   - **Why it’s a follow-up**
-    - Append-only API is good baseline, but filesystem-level integrity can be improved.
+    - `/health` currently includes `sandbox` absolute path; not required for liveness and increases disclosure.
   - **Where it is in code (file/function)**
-    - `apps/daemon/src/audit.ts`.
+    - `apps/daemon/src/routes/health.ts`.
   - **Exact fix suggestion**
-    - Create log with restrictive mode (`0600`) and optionally add chained hash per event line.
+    - Keep `{status, version, uptime, daemonPort, timestamp}` and move detailed config to authenticated diagnostics endpoint.
 
-- [ ] **Supervisor stale-run cleanup UX could be clearer**
+- [ ] **Clarify and document restart recovery contract**
   - **Why it’s a follow-up**
-    - Stale marking exists, but operator tooling for stale/orphan visibility can be improved.
+    - Stale marking works, but expected operator workflow for cleanup/retry is undocumented.
   - **Where it is in code (file/function)**
-    - `apps/daemon/src/supervisor.ts` (`loadPersistedRuns`, `markStaleSessions`, `shutdown`).
+    - `apps/daemon/src/supervisor.ts` (`loadPersistedRuns`, `cleanupRuns`) and `apps/daemon/src/routes/supervisor.ts` (`/cleanup`).
   - **Exact fix suggestion**
-    - Add a dedicated stale-runs endpoint/report and explicit cleanup summary in audit.
+    - Add a short runbook: stale-state meaning, cleanup command, and expected audit events.

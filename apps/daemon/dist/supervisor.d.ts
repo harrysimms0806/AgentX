@@ -19,6 +19,7 @@ declare class Supervisor {
     private initialized;
     private runsFile;
     private rotationInterval;
+    private toPublicRun;
     initialize(): Promise<void>;
     /**
      * Persist runs to disk for recovery after restart
@@ -48,14 +49,6 @@ declare class Supervisor {
      * Phase 0: Basic SIGTERM, escalate to SIGKILL after delay
      */
     killRun(runId: string, reason?: string): Promise<boolean>;
-    /**
-     * List runs with optional project filter
-     */
-    listRuns(projectId?: string): Run[];
-    /**
-     * Cleanup stale completed runs older than maxAgeMs
-     */
-    cleanupRuns(projectId?: string, maxAgeMs?: number): number;
     /**
      * Get run status
      */
