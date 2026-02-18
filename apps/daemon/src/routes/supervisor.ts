@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { supervisor } from '../supervisor';
 import { audit } from '../audit';
+import { sandbox } from '../sandbox';
 
 const router = Router();
 
@@ -27,29 +28,56 @@ router.post('/runs', (req, res) => {
   res.status(201).json(run);
 });
 
-// GET /supervisor/runs - List all runs
-router.get('/runs', (req, res) => {
-  const { projectId } = req.query;
-  
-  let runs = Array.from(supervisor['runs'].values()).map(r => ({
-    id: r.id,
-    projectId: r.projectId,
-    type: r.type,
-    ownerAgentId: r.ownerAgentId,
-    status: r.status,
-    pid: r.pid,
-    timeoutMs: r.timeoutMs,
-    startedAt: r.startedAt,
-    endedAt: r.endedAt,
-    exitCode: r.exitCode,
-    logsPath: r.logsPath,
-    summary: r.summary,
-  }));
+// POST /supervisor/runs/:id/start - Start command run (Phase 0 guarded execution)
+router.post('/runs/:id/start', async (req, res) => {
+  const { id } = req.params;
+  const { cmd, args = [], projectId, cwd = '.' } = req.body;
+  const clientId = (req as any).session?.clientId || 'unknown';
 
-  if (projectId) {
-    runs = runs.filter(r => r.projectId === projectId);
+  if (!projectId || !cmd || !Array.isArray(args)) {
+    res.status(400).json({ error: 'projectId, cmd, and args[] required' });
+    return;
   }
 
+  const run = supervisor.getRun(id);
+  if (!run) {
+    res.status(404).json({ error: 'Run not found' });
+    return;
+  }
+
+  if (run.projectId !== projectId) {
+    res.status(400).json({ error: 'Run projectId mismatch' });
+    return;
+  }
+
+  if (run.status !== 'pending') {
+    res.status(400).json({ error: 'Run is not pending' });
+    return;
+  }
+
+  const cwdCheck = sandbox.validatePath(projectId, cwd);
+  if (!cwdCheck.allowed) {
+    res.status(403).json({ error: cwdCheck.error || 'Invalid cwd' });
+    return;
+  }
+
+  const allowedCommands = new Set(['node', 'npm', 'bash', 'sh', 'python', 'python3']);
+  if (!allowedCommands.has(cmd)) {
+    res.status(403).json({ error: `Command not allowed in Phase 0: ${cmd}` });
+    return;
+  }
+
+  await supervisor.spawnCommand(id, cmd, args, cwdCheck.realPath!);
+
+  audit.log(projectId, 'user', 'RUN_START', { runId: id, cmd, args, cwd }, clientId);
+
+  res.json({ success: true, runId: id });
+});
+
+// GET /supervisor/runs - List all runs
+router.get('/runs', (req, res) => {
+  const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
+  const runs = supervisor.listRuns(projectId);
   res.json({ runs });
 });
 
@@ -57,7 +85,7 @@ router.get('/runs', (req, res) => {
 router.get('/runs/:id', (req, res) => {
   const { id } = req.params;
   const run = supervisor.getRun(id);
-  
+
   if (!run) {
     res.status(404).json({ error: 'Run not found' });
     return;
@@ -70,7 +98,7 @@ router.get('/runs/:id', (req, res) => {
 router.get('/runs/:id/output', (req, res) => {
   const { id } = req.params;
   const lines = parseInt(req.query.lines as string) || 50;
-  
+
   const output = supervisor.getRunOutput(id, lines);
   res.json({ output });
 });
@@ -80,7 +108,7 @@ router.post('/runs/:id/kill', async (req, res) => {
   const { id } = req.params;
   const { reason = 'user' } = req.body;
   const clientId = (req as any).session?.clientId || 'unknown';
-  
+
   const run = supervisor.getRun(id);
   if (!run) {
     res.status(404).json({ error: 'Run not found' });
@@ -93,7 +121,7 @@ router.post('/runs/:id/kill', async (req, res) => {
   }
 
   const success = await supervisor.killRun(id, reason);
-  
+
   if (success) {
     audit.log(run.projectId, 'user', 'RUN_KILL', { runId: id, reason }, clientId);
     res.json({ success: true, message: 'Kill signal sent' });
@@ -106,27 +134,10 @@ router.post('/runs/:id/kill', async (req, res) => {
 router.post('/cleanup', (req, res) => {
   const { projectId } = req.body;
   const clientId = (req as any).session?.clientId || 'unknown';
-  
-  const runs = Array.from(supervisor['runs'].values());
-  let cleaned = 0;
 
-  for (const run of runs) {
-    // Clean up completed/error/killed runs older than 24 hours
-    if (run.endedAt && run.status !== 'running') {
-      const endedTime = new Date(run.endedAt).getTime();
-      const age = Date.now() - endedTime;
-      
-      if (age > 24 * 60 * 60 * 1000) { // 24 hours
-        if (!projectId || run.projectId === projectId) {
-          supervisor['runs'].delete(run.id);
-          cleaned++;
-        }
-      }
-    }
-  }
+  const cleaned = supervisor.cleanupRuns(projectId);
 
   if (cleaned > 0) {
-    supervisor['persistRuns']();
     audit.log(projectId || 'system', 'user', 'SUPERVISOR_CLEANUP', { cleanedRuns: cleaned }, clientId);
   }
 
