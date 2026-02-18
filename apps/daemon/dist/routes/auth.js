@@ -4,6 +4,7 @@ exports.authProtectedRouter = exports.authPublicRouter = void 0;
 // Authentication endpoints
 const express_1 = require("express");
 const auth_1 = require("../auth");
+const audit_1 = require("../audit");
 const router = (0, express_1.Router)();
 exports.authPublicRouter = router;
 // POST /auth/session - Create new session (PUBLIC - no auth required)
@@ -14,6 +15,8 @@ router.post('/session', (req, res) => {
         return;
     }
     const session = auth_1.auth.createSession(clientId);
+    // Audit: session created (redacted token)
+    audit_1.audit.log('system', 'system', 'AUTH_SESSION_CREATE', { clientId, tokenPrefix: session.token.slice(0, 8) + '...' }, 'daemon');
     res.json({
         token: session.token,
         expiresAt: null, // Sessions don't expire in Phase 0
@@ -26,12 +29,15 @@ exports.authProtectedRouter = protectedRouter;
 protectedRouter.post('/revoke', (req, res) => {
     // Token already validated by authMiddleware, get it from session
     const token = req.session?.token;
+    const clientId = req.session?.clientId;
     if (!token) {
         res.status(401).json({ error: 'Token not found in session' });
         return;
     }
     const revoked = auth_1.auth.revokeSession(token);
     if (revoked) {
+        // Audit: session revoked
+        audit_1.audit.log('system', 'user', 'AUTH_SESSION_REVOKE', { clientId, tokenPrefix: token.slice(0, 8) + '...' }, clientId);
         res.json({ status: 'revoked' });
     }
     else {

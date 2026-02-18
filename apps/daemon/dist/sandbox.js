@@ -117,6 +117,13 @@ class Sandbox {
                 error: projectIdCheck.error,
             };
         }
+        // Reject absolute paths explicitly
+        if (path_1.default.isAbsolute(relativePath)) {
+            return {
+                allowed: false,
+                error: 'Access denied: absolute paths not allowed',
+            };
+        }
         // Prevent path traversal in relativePath
         if (relativePath.includes('..')) {
             return {
