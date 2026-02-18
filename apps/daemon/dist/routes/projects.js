@@ -10,10 +10,9 @@ const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const sandbox_1 = require("../sandbox");
 const audit_1 = require("../audit");
+const projects_1 = require("../store/projects");
 const router = (0, express_1.Router)();
 exports.projectsRouter = router;
-// In-memory store for Phase 0 (replace with SQLite in future)
-const projects = new Map();
 // Default project settings
 const defaultSettings = {
     capabilities: {
@@ -29,7 +28,7 @@ const defaultSettings = {
 };
 // GET /projects - List all projects
 router.get('/', (req, res) => {
-    const projectList = Array.from(projects.values());
+    const projectList = Array.from(projects_1.projects.values());
     res.json(projectList);
 });
 // POST /projects - Create new project
@@ -43,7 +42,7 @@ router.post('/', (req, res) => {
     const id = name.toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '');
-    if (projects.has(id)) {
+    if (projects_1.projects.has(id)) {
         res.status(409).json({ error: 'Project already exists' });
         return;
     }
@@ -79,7 +78,7 @@ router.post('/', (req, res) => {
         lastOpenedAt: new Date().toISOString(),
         settings: defaultSettings,
     };
-    projects.set(id, project);
+    projects_1.projects.set(id, project);
     // Audit log
     audit_1.audit.log(id, 'system', 'PROJECT_CREATE', { name }, 'daemon');
     res.status(201).json(project);
@@ -87,7 +86,7 @@ router.post('/', (req, res) => {
 // POST /projects/:id/open - Open/switch to project
 router.post('/:id/open', (req, res) => {
     const { id } = req.params;
-    const project = projects.get(id);
+    const project = projects_1.projects.get(id);
     if (!project) {
         res.status(404).json({ error: 'Project not found' });
         return;
@@ -99,7 +98,7 @@ router.post('/:id/open', (req, res) => {
 // GET /projects/:id/settings - Get project settings
 router.get('/:id/settings', (req, res) => {
     const { id } = req.params;
-    const project = projects.get(id);
+    const project = projects_1.projects.get(id);
     if (!project) {
         res.status(404).json({ error: 'Project not found' });
         return;
@@ -109,7 +108,7 @@ router.get('/:id/settings', (req, res) => {
 // PUT /projects/:id/settings - Update project settings
 router.put('/:id/settings', (req, res) => {
     const { id } = req.params;
-    const project = projects.get(id);
+    const project = projects_1.projects.get(id);
     if (!project) {
         res.status(404).json({ error: 'Project not found' });
         return;
