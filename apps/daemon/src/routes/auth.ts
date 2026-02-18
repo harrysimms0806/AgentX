@@ -4,7 +4,7 @@ import { auth } from '../auth';
 
 const router = Router();
 
-// POST /auth/session - Create new session
+// POST /auth/session - Create new session (PUBLIC - no auth required)
 router.post('/session', (req, res) => {
   const { clientId } = req.body;
   
@@ -21,16 +21,21 @@ router.post('/session', (req, res) => {
   });
 });
 
-// POST /auth/revoke - Revoke session
-router.post('/revoke', (req, res) => {
-  const authHeader = req.headers.authorization;
+export { router as authPublicRouter };
+
+// Protected auth routes (require valid Bearer token)
+const protectedRouter = Router();
+
+// POST /auth/revoke - Revoke session (PROTECTED - requires auth)
+protectedRouter.post('/revoke', (req, res) => {
+  // Token already validated by authMiddleware, get it from session
+  const token = (req as any).session?.token;
   
-  if (!authHeader) {
-    res.status(401).json({ error: 'Authorization header required' });
+  if (!token) {
+    res.status(401).json({ error: 'Token not found in session' });
     return;
   }
 
-  const token = authHeader.split(' ')[1];
   const revoked = auth.revokeSession(token);
   
   if (revoked) {
@@ -40,4 +45,4 @@ router.post('/revoke', (req, res) => {
   }
 });
 
-export { router as authRouter };
+export { protectedRouter as authProtectedRouter };

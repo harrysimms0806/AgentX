@@ -3,33 +3,113 @@ import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { spawn, ChildProcess } from 'child_process';
-import { config } from './config';
 import { Run } from '@agentx/api-types';
 
 interface RunRecord extends Run {
   process?: ChildProcess;
   outputBuffer: string[];
+  bufferedBytes: number;  // Track total bytes in buffer
   logStream?: fs.WriteStream;
 }
 
 class Supervisor {
   private runs: Map<string, RunRecord> = new Map();
-  private logsDir: string;
-
-  constructor() {
-    this.logsDir = path.join(config.runtimeDir, 'logs');
-  }
+  private logsDir: string = '';
+  private runtimeDir: string = '';
+  private defaultTimeout: number = 300000;
+  private logRetention: number = 604800000;
+  private maxLogSize: number = 10 * 1024 * 1024; // 10MB max log file size
+  private maxOutputBuffer: number = 10 * 1024 * 1024; // 10MB max buffer size
+  private initialized: boolean = false;
+  private runsFile: string = '';
+  private rotationInterval: NodeJS.Timeout | null = null;
 
   async initialize(): Promise<void> {
+    const { config } = await import('./config');
+    this.logsDir = path.join(config.runtimeDir, 'logs');
+    this.runtimeDir = config.runtimeDir;
+    this.defaultTimeout = config.defaultTimeout;
+    this.logRetention = config.logRetention;
+    this.maxOutputBuffer = config.maxOutputBuffer;
+    this.runsFile = path.join(config.runtimeDir, 'runs.json');
+    this.initialized = true;
+    
     // Ensure logs directory exists
     if (!fs.existsSync(this.logsDir)) {
       fs.mkdirSync(this.logsDir, { recursive: true });
     }
     
-    // TODO: Load any persisted runs from database
-    // For Phase 0, we start fresh
+    // Load persisted runs and mark stale
+    await this.loadPersistedRuns();
+    
+    // Start log rotation scheduler (every hour)
+    this.rotationInterval = setInterval(() => {
+      this.rotateLogs();
+    }, 60 * 60 * 1000);
     
     console.log(`🔧 Supervisor initialized`);
+  }
+
+  /**
+   * Persist runs to disk for recovery after restart
+   */
+  private persistRuns(): void {
+    if (!this.runsFile) return;
+    
+    // Only persist metadata, not process handles
+    const serializableRuns = Array.from(this.runs.values()).map(r => ({
+      id: r.id,
+      projectId: r.projectId,
+      type: r.type,
+      ownerAgentId: r.ownerAgentId,
+      status: r.status,
+      startedAt: r.startedAt,
+      endedAt: r.endedAt,
+      exitCode: r.exitCode,
+      logsPath: r.logsPath,
+      summary: r.summary,
+    }));
+    
+    fs.writeFileSync(this.runsFile, JSON.stringify({ runs: serializableRuns }, null, 2));
+  }
+
+  /**
+   * Load persisted runs and mark any "running" as stale
+   */
+  private async loadPersistedRuns(): Promise<void> {
+    if (!fs.existsSync(this.runsFile)) return;
+    
+    try {
+      const data = JSON.parse(fs.readFileSync(this.runsFile, 'utf8'));
+      const persistedRuns: Run[] = data.runs || [];
+      
+      for (const run of persistedRuns) {
+        // Mark previously running runs as stale
+        if (run.status === 'running') {
+          run.status = 'error';
+          run.summary = 'Daemon restart - session stale';
+          run.endedAt = new Date().toISOString();
+          console.log(`⚠️ Marked stale run: ${run.id}`);
+        }
+        
+        // Reconstruct RunRecord without process handle
+        const runRecord: RunRecord = {
+          ...run,
+          outputBuffer: [],
+          bufferedBytes: 0,
+          logsPath: run.logsPath || path.join(this.logsDir, `${run.id}.log`),
+        };
+        
+        this.runs.set(run.id, runRecord);
+      }
+      
+      if (persistedRuns.length > 0) {
+        console.log(`📋 Loaded ${persistedRuns.length} persisted run(s), marked stale sessions`);
+        this.persistRuns(); // Save updated statuses
+      }
+    } catch (err) {
+      console.warn('Failed to load persisted runs:', err);
+    }
   }
 
   /**
@@ -49,12 +129,16 @@ class Supervisor {
       status: 'pending',
       logsPath: path.join(this.logsDir, `${id}.log`),
       outputBuffer: [],
+      bufferedBytes: 0,
     };
 
     this.runs.set(id, run);
     
     // Create log file
     run.logStream = fs.createWriteStream(run.logsPath);
+    
+    // Persist new run
+    this.persistRuns();
     
     console.log(`▶️ Created run ${id} (${type})`);
     return run;
@@ -63,10 +147,16 @@ class Supervisor {
   /**
    * Spawn a command
    * Phase 0: Basic skeleton - full implementation in Phase 3
+   * @param runId - The run ID
+   * @param cmd - Command executable (e.g., 'npm', 'node')
+   * @param args - Array of arguments (e.g., ['run', 'build'])
+   * @param cwd - Working directory
+   * @param env - Optional environment variables
    */
   async spawnCommand(
     runId: string,
-    command: string,
+    cmd: string,
+    args: string[],
     cwd: string,
     env?: Record<string, string>
   ): Promise<void> {
@@ -76,12 +166,7 @@ class Supervisor {
     run.status = 'running';
     run.startedAt = new Date().toISOString();
 
-    // Parse command
-    const parts = command.split(' ');
-    const cmd = parts[0];
-    const args = parts.slice(1);
-
-    // Spawn process
+    // Spawn process with structured command
     const child = spawn(cmd, args, {
       cwd,
       env: { ...process.env, ...env },
@@ -93,18 +178,47 @@ class Supervisor {
     // Track output
     child.stdout?.on('data', (data) => {
       const line = data.toString();
-      run.outputBuffer.push(line);
-      run.logStream?.write(line);
+      const lineBytes = Buffer.byteLength(line, 'utf8');
       
-      // Limit buffer size
-      if (run.outputBuffer.length > 1000) {
-        run.outputBuffer.shift();
+      // Check buffer size limit before adding
+      if (run.bufferedBytes + lineBytes > this.maxOutputBuffer) {
+        // Remove oldest lines until we have room
+        while (run.outputBuffer.length > 0 && run.bufferedBytes + lineBytes > this.maxOutputBuffer) {
+          const removed = run.outputBuffer.shift();
+          if (removed) {
+            run.bufferedBytes -= Buffer.byteLength(removed, 'utf8');
+          }
+        }
       }
+      
+      run.outputBuffer.push(line);
+      run.bufferedBytes += lineBytes;
+      
+      // Check log file size before writing
+      this.checkLogSize(run);
+      run.logStream?.write(line);
     });
 
     child.stderr?.on('data', (data) => {
       const line = `stderr: ${data}`;
+      const lineBytes = Buffer.byteLength(line, 'utf8');
+      
+      // Check buffer size limit before adding (same logic as stdout)
+      if (run.bufferedBytes + lineBytes > this.maxOutputBuffer) {
+        // Remove oldest lines until we have room
+        while (run.outputBuffer.length > 0 && run.bufferedBytes + lineBytes > this.maxOutputBuffer) {
+          const removed = run.outputBuffer.shift();
+          if (removed) {
+            run.bufferedBytes -= Buffer.byteLength(removed, 'utf8');
+          }
+        }
+      }
+      
       run.outputBuffer.push(line);
+      run.bufferedBytes += lineBytes;
+      
+      // Check log file size before writing
+      this.checkLogSize(run);
       run.logStream?.write(line);
     });
 
@@ -113,6 +227,10 @@ class Supervisor {
       run.exitCode = code ?? undefined;
       run.endedAt = new Date().toISOString();
       run.logStream?.end();
+      
+      // Persist final state
+      this.persistRuns();
+      
       console.log(`⏹️ Run ${runId} finished with code ${code}`);
     });
 
@@ -121,7 +239,7 @@ class Supervisor {
       if (run.status === 'running') {
         this.killRun(runId, 'timeout');
       }
-    }, config.defaultTimeout);
+    }, this.defaultTimeout);
   }
 
   /**
@@ -148,6 +266,9 @@ class Supervisor {
     run.status = 'killed';
     run.endedAt = new Date().toISOString();
     run.summary = `Killed: ${reason}`;
+    
+    // Persist state change
+    this.persistRuns();
     
     return true;
   }
@@ -189,6 +310,34 @@ class Supervisor {
   }
 
   /**
+   * Check log file size and rotate if exceeded
+   */
+  private checkLogSize(run: RunRecord): void {
+    if (!run.logsPath || !fs.existsSync(run.logsPath)) return;
+    
+    try {
+      const stats = fs.statSync(run.logsPath);
+      if (stats.size > this.maxLogSize) {
+        // Rotate: close current, rename to .1, create new
+        run.logStream?.end();
+        
+        const rotatedPath = `${run.logsPath}.1`;
+        if (fs.existsSync(rotatedPath)) {
+          fs.unlinkSync(rotatedPath);
+        }
+        fs.renameSync(run.logsPath, rotatedPath);
+        
+        run.logStream = fs.createWriteStream(run.logsPath);
+        run.logStream.write(`--- Log rotated at ${new Date().toISOString()} ---\n`);
+        
+        console.log(`🔄 Rotated log for run ${run.id}`);
+      }
+    } catch (err) {
+      // Ignore errors during size check
+    }
+  }
+
+  /**
    * Mark stale sessions on restart
    * Call this on daemon startup
    */
@@ -203,21 +352,59 @@ class Supervisor {
   }
 
   /**
-   * Cleanup old logs
+   * Cleanup old logs by age and enforce total size limit
    */
   rotateLogs(): void {
     const now = Date.now();
     const files = fs.readdirSync(this.logsDir);
     
+    let totalSize = 0;
+    const logFiles: { path: string; mtime: number; size: number }[] = [];
+    
+    // Collect all log files with metadata
     for (const file of files) {
       const filePath = path.join(this.logsDir, file);
-      const stats = fs.statSync(filePath);
-      
-      if (now - stats.mtimeMs > config.logRetention) {
-        fs.unlinkSync(filePath);
-        console.log(`🗑️ Rotated log: ${file}`);
+      try {
+        const stats = fs.statSync(filePath);
+        totalSize += stats.size;
+        logFiles.push({ path: filePath, mtime: stats.mtimeMs, size: stats.size });
+      } catch (err) {
+        // Skip files we can't stat
       }
     }
+    
+    // Sort by modification time (oldest first)
+    logFiles.sort((a, b) => a.mtime - b.mtime);
+    
+    // Enforce max total size (100MB) and age limit
+    const maxTotalSize = 100 * 1024 * 1024; // 100MB
+    
+    for (const file of logFiles) {
+      const ageExceeded = now - file.mtime > this.logRetention;
+      const sizeExceeded = totalSize > maxTotalSize;
+      
+      if (ageExceeded || sizeExceeded) {
+        try {
+          fs.unlinkSync(file.path);
+          totalSize -= file.size;
+          console.log(`🗑️ Rotated log: ${path.basename(file.path)} (${ageExceeded ? 'age' : 'size'})`);
+        } catch (err) {
+          // Ignore errors during cleanup
+        }
+      }
+    }
+  }
+  
+  /**
+   * Shutdown cleanup
+   */
+  shutdown(): void {
+    if (this.rotationInterval) {
+      clearInterval(this.rotationInterval);
+    }
+    // Persist final state
+    this.persistRuns();
+    console.log('🔧 Supervisor shutdown complete');
   }
 }
 

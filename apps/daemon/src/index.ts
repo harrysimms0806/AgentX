@@ -9,14 +9,14 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
-import { config } from './config';
+import { config, initializeConfig } from './config';
 import { auth } from './auth';
 import { sandbox } from './sandbox';
 import { audit } from './audit';
 import { supervisor } from './supervisor';
 import { authMiddleware } from './middleware/auth';
 import { healthRouter } from './routes/health';
-import { authRouter } from './routes/auth';
+import { authPublicRouter, authProtectedRouter } from './routes/auth';
 import { projectsRouter } from './routes/projects';
 import { fsRouter } from './routes/filesystem';
 import { auditRouter } from './routes/audit';
@@ -43,9 +43,10 @@ app.use(cors({
 
 app.use(express.json({ limit: '10mb' }));
 
-// Routes
+// Routes - /health is the ONLY public endpoint (per Phase 0 requirements)
 app.use('/health', healthRouter);
-app.use('/auth', authRouter);
+app.use('/auth', authPublicRouter);              // /auth/session - public
+app.use('/auth', authMiddleware, authProtectedRouter);  // /auth/revoke - protected
 app.use('/projects', authMiddleware, projectsRouter);
 app.use('/fs', authMiddleware, fsRouter);
 app.use('/audit', authMiddleware, auditRouter);
@@ -62,6 +63,10 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
 // Initialize and start
 async function main() {
   console.log('🔧 AgentX Daemon - Phase 0');
+  
+  // Initialize config first (includes port discovery)
+  await initializeConfig();
+  
   console.log(`Sandbox root: ${config.sandboxRoot}`);
   
   // Initialize subsystems
@@ -98,6 +103,21 @@ async function main() {
 main().catch((err) => {
   console.error('Failed to start daemon:', err);
   process.exit(1);
+});
+
+// Graceful shutdown handlers
+process.on('SIGINT', () => {
+  console.log('\n🛑 Received SIGINT, shutting down...');
+  supervisor.shutdown();
+  audit.shutdown();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('\n🛑 Received SIGTERM, shutting down...');
+  supervisor.shutdown();
+  audit.shutdown();
+  process.exit(0);
 });
 
 export { app };
