@@ -63,6 +63,7 @@ export interface Run {
     type: 'agent' | 'command' | 'git' | 'index';
     ownerAgentId?: string;
     status: 'pending' | 'running' | 'completed' | 'error' | 'killed';
+    pid?: number;
     startedAt?: string;
     endedAt?: string;
     exitCode?: number;

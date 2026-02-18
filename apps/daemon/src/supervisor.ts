@@ -63,6 +63,7 @@ class Supervisor {
       type: r.type,
       ownerAgentId: r.ownerAgentId,
       status: r.status,
+      pid: r.process?.pid || r.pid,  // Persist PID if available
       startedAt: r.startedAt,
       endedAt: r.endedAt,
       exitCode: r.exitCode,
@@ -174,6 +175,7 @@ class Supervisor {
     });
 
     run.process = child;
+    run.pid = child.pid;  // Track PID for diagnostics and persistence
     
     // Track output
     child.stdout?.on('data', (data) => {
@@ -250,18 +252,44 @@ class Supervisor {
     const run = this.runs.get(runId);
     if (!run || !run.process) return false;
 
+    const pid = run.process.pid;
+    if (!pid) {
+      // No PID available, can't do reliable kill escalation
+      console.log(`🛑 Killing run ${runId} (${reason}) - no PID available`);
+      run.process.kill('SIGTERM');
+      run.status = 'killed';
+      run.endedAt = new Date().toISOString();
+      run.summary = `Killed: ${reason}`;
+      this.persistRuns();
+      return true;
+    }
+
     console.log(`🛑 Killing run ${runId} (${reason})`);
+    let killTimer: NodeJS.Timeout | null = null;
 
     // Try graceful termination first
     run.process.kill('SIGTERM');
     
-    // Escalate to SIGKILL after 5 seconds if still running
-    setTimeout(() => {
-      if (!run.process?.killed) {
-        console.log(`💀 Force killing run ${runId}`);
-        run.process?.kill('SIGKILL');
+    // Escalate to SIGKILL after 5 seconds if process still alive
+    killTimer = setTimeout(() => {
+      // Check if process is still alive using kill(pid, 0)
+      try {
+        process.kill(pid, 0); // Throws if process doesn't exist
+        console.log(`💀 Force killing run ${runId} (SIGKILL)`);
+        process.kill(pid, 'SIGKILL');
+      } catch (err) {
+        // Process already dead, nothing to do
+        console.log(`✅ Run ${runId} already terminated`);
       }
     }, 5000);
+
+    // Clear escalation timer when process exits
+    run.process.once('exit', () => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+    });
 
     run.status = 'killed';
     run.endedAt = new Date().toISOString();

@@ -29,6 +29,7 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
 }));
 
+// CORS restricted to localhost only
 app.use(cors({
   origin: (origin, callback) => {
     // Allow UI origin or no origin (same-origin requests)
@@ -42,6 +43,13 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: '10mb' }));
+
+// PUBLIC ROUTE ALLOWLIST
+// These are the ONLY routes that do not require Bearer token authentication
+// - /health - Health check for monitoring
+// - /auth/session - Create new session (must be public to obtain token)
+// ALL other routes require valid Bearer token via authMiddleware
+const PUBLIC_ROUTES = ['/health', '/auth/session'] as const;
 
 // Routes - /health is the ONLY public endpoint (per Phase 0 requirements)
 app.use('/health', healthRouter);
