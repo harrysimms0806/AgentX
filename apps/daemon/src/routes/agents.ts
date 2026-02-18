@@ -1,9 +1,10 @@
 // Agent API Routes
-// Phase 4: Agent management and spawning
+// Phase 4-5: Agent management, spawning, and execution
 
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { agentManager } from '../agents';
+import { agentRunner } from '../agent-runner';
 import { audit } from '../audit';
 import { projects } from '../store/projects';
 
@@ -200,6 +201,96 @@ router.post('/instances/:id/handoff', async (req, res) => {
     });
   } catch (err: any) {
     res.status(500).json({ error: 'Handoff failed', message: err.message });
+  }
+});
+
+// POST /agents/instances/:id/execute - Execute agent with AI (Phase 5)
+router.post('/instances/:id/execute', async (req, res) => {
+  ensureInit();
+  const { id } = req.params;
+  const { prompt } = req.body;
+
+  if (!prompt) {
+    res.status(400).json({ error: 'prompt is required' });
+    return;
+  }
+
+  const instance = agentManager.getInstance(id);
+  if (!instance) {
+    res.status(404).json({ error: 'Agent instance not found' });
+    return;
+  }
+
+  if (instance.status === 'running') {
+    res.status(409).json({ error: 'Agent is already running' });
+    return;
+  }
+
+  try {
+    const result = await agentRunner.startRun(id, prompt, (step) => {
+      // In production, this would stream via WebSocket
+      console.log(`Run step: ${step.type} - ${step.content.slice(0, 100)}`);
+    });
+
+    if (!result.success) {
+      res.status(500).json({ error: result.error });
+      return;
+    }
+
+    res.json({
+      success: true,
+      runId: result.runId,
+      message: 'Agent execution started',
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Execution failed', message: err.message });
+  }
+});
+
+// GET /agents/runs/:runId - Get run status and steps
+router.get('/runs/:runId', (req, res) => {
+  ensureInit();
+  const { runId } = req.params;
+  
+  const run = agentRunner.getRun(runId);
+  if (!run) {
+    res.status(404).json({ error: 'Run not found' });
+    return;
+  }
+  
+  res.json({
+    runId: run.runId,
+    instanceId: run.instanceId,
+    status: run.status,
+    iteration: run.iteration,
+    maxIterations: run.maxIterations,
+    steps: run.steps,
+  });
+});
+
+// POST /agents/runs/:runId/pause - Pause a running agent
+router.post('/runs/:runId/pause', (req, res) => {
+  ensureInit();
+  const { runId } = req.params;
+  
+  const success = agentRunner.pauseRun(runId);
+  if (success) {
+    res.json({ success: true, message: 'Run paused' });
+  } else {
+    res.status(400).json({ error: 'Run not found or not running' });
+  }
+});
+
+// POST /agents/runs/:runId/resume - Resume a paused agent
+router.post('/runs/:runId/resume', (req, res) => {
+  ensureInit();
+  const { runId } = req.params;
+  
+  const success = agentRunner.resumeRun(runId);
+  if (success) {
+    res.json({ success: true, message: 'Run resumed' });
+  } else {
+    res.status(400).json({ error: 'Run not found or not paused' });
   }
 });
 

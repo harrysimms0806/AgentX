@@ -1,6 +1,6 @@
 "use strict";
-// AgentX Daemon - Phase 4 Implementation
-// Core daemon + SQLite + WebSocket terminals + Agent orchestration
+// AgentX Daemon - Phase 5 Implementation
+// Core daemon + SQLite + WebSocket terminals + Agent orchestration + AI execution
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -33,6 +33,7 @@ const locks_1 = require("./routes/locks");
 const git_1 = require("./routes/git");
 const terminals_1 = require("./routes/terminals");
 const agents_2 = require("./routes/agents");
+const runs_1 = require("./routes/runs");
 const app = (0, express_1.default)();
 exports.app = app;
 // Security middleware
@@ -78,6 +79,7 @@ app.use('/locks', auth_2.authMiddleware, locks_1.locksRouter);
 app.use('/git', auth_2.authMiddleware, git_1.gitRouter);
 app.use('/terminals', auth_2.authMiddleware, terminals_1.terminalsRouter);
 app.use('/agents', auth_2.authMiddleware, agents_2.agentsRouter);
+app.use('/runs', auth_2.authMiddleware, runs_1.runsRouter);
 // Error handler
 app.use((err, req, res, next) => {
     console.error('Error:', err);
@@ -88,7 +90,7 @@ app.use((err, req, res, next) => {
 });
 // Initialize and start
 async function main() {
-    console.log('🔧 AgentX Daemon - Phase 4');
+    console.log('🔧 AgentX Daemon - Phase 5');
     // Initialize config first (includes port discovery)
     await (0, config_1.initializeConfig)();
     console.log(`Sandbox root: ${config_1.config.sandboxRoot}`);
@@ -127,6 +129,7 @@ async function main() {
         console.log(`🔒 Auth: ${auth_1.auth.isEnabled() ? 'enabled' : 'disabled'}`);
         console.log('🖥️  WebSocket terminals: enabled on /ws');
         console.log('🤖 Agent orchestration: enabled');
+        console.log('🧠 AI agent execution: enabled (Phase 5)');
     });
 }
 main().catch((err) => {

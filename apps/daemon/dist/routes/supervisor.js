@@ -30,7 +30,6 @@ router.post('/runs/:id/spawn', async (req, res) => {
     const { id } = req.params;
     const { cmd, args, env } = req.body;
     const clientId = req.session?.clientId || 'unknown';
-    // Validate inputs
     if (!cmd || typeof cmd !== 'string') {
         res.status(400).json({ error: 'cmd required (string)' });
         return;
@@ -39,13 +38,11 @@ router.post('/runs/:id/spawn', async (req, res) => {
         res.status(400).json({ error: 'args must be an array' });
         return;
     }
-    // Get the run
     const run = supervisor_1.supervisor.getRun(id);
     if (!run) {
         res.status(404).json({ error: 'Run not found' });
         return;
     }
-    // Check project exists and has EXEC_SHELL capability
     const project = projects_1.projects.get(run.projectId);
     if (!project) {
         res.status(404).json({ error: 'Project not found' });
@@ -55,59 +52,90 @@ router.post('/runs/:id/spawn', async (req, res) => {
         res.status(403).json({ error: 'EXEC_SHELL capability not enabled for this project' });
         return;
     }
-    // Get sandboxed cwd
     const pathResult = sandbox_1.sandbox.getProjectPath(run.projectId);
     if (!pathResult.allowed) {
         res.status(403).json({ error: pathResult.error || 'Invalid project path' });
         return;
     }
-    const cwd = pathResult.path;
-    // Audit the spawn
     audit_1.audit.logLegacy(run.projectId, 'user', 'RUN_SPAWN', { runId: id, cmd, args }, clientId);
-    // Spawn the command
     try {
-        await supervisor_1.supervisor.spawnCommand(id, cmd, args, cwd, env);
+        await supervisor_1.supervisor.spawnCommand(id, cmd, args, pathResult.path, env);
         res.json({ success: true, message: 'Command spawned', runId: id });
     }
     catch (err) {
         res.status(500).json({ error: `Failed to spawn: ${err.message}` });
     }
 });
-// GET /supervisor/runs - List all runs
+// GET /supervisor/runs - List all runs (project-scoped)
 router.get('/runs', (req, res) => {
-    const { projectId } = req.query;
+    const projectId = req.query.projectId;
+    if (!projectId) {
+        res.status(400).json({ error: 'projectId is required' });
+        return;
+    }
     const runs = supervisor_1.supervisor.listRuns(projectId);
     res.json({ runs });
 });
-// GET /supervisor/runs/:id - Get specific run
+// GET /supervisor/runs/:id - Get specific run (project-scoped)
 router.get('/runs/:id', (req, res) => {
     const { id } = req.params;
+    const projectId = req.query.projectId;
+    if (!projectId) {
+        res.status(400).json({ error: 'projectId is required' });
+        return;
+    }
     const run = supervisor_1.supervisor.getRun(id);
     if (!run) {
         res.status(404).json({ error: 'Run not found' });
         return;
     }
+    if (run.projectId !== projectId) {
+        res.status(403).json({ error: 'Run does not belong to provided projectId' });
+        return;
+    }
     res.json(run);
 });
-// GET /supervisor/runs/:id/output - Get run output
+// GET /supervisor/runs/:id/output - Get run output (project-scoped)
 router.get('/runs/:id/output', (req, res) => {
     const { id } = req.params;
+    const projectId = req.query.projectId;
     const lines = parseInt(req.query.lines) || 50;
+    if (!projectId) {
+        res.status(400).json({ error: 'projectId is required' });
+        return;
+    }
+    const run = supervisor_1.supervisor.getRun(id);
+    if (!run) {
+        res.status(404).json({ error: 'Run not found' });
+        return;
+    }
+    if (run.projectId !== projectId) {
+        res.status(403).json({ error: 'Run does not belong to provided projectId' });
+        return;
+    }
     const output = supervisor_1.supervisor.getRunOutput(id, lines);
     res.json({ output });
 });
 // POST /supervisor/runs/:id/kill - Kill a run
 router.post('/runs/:id/kill', async (req, res) => {
     const { id } = req.params;
-    const { reason = 'user' } = req.body;
+    const { reason = 'user', projectId } = req.body;
     const clientId = req.session?.clientId || 'unknown';
+    if (!projectId) {
+        res.status(400).json({ error: 'projectId is required' });
+        return;
+    }
     const run = supervisor_1.supervisor.getRun(id);
     if (!run) {
         res.status(404).json({ error: 'Run not found' });
         return;
     }
-    if (run.status !== 'running') {
-        res.status(400).json({ error: 'Run is not running' });
+    if (run.projectId !== projectId) {
+        res.status(403).json({ error: 'Run does not belong to provided projectId' });
+        return;
+    }
+    if (run.status !== 'running' && run.status !== 'queued') {
+        res.status(400).json({ error: 'Run is not active' });
         return;
     }
     const success = await supervisor_1.supervisor.killRun(id, reason);

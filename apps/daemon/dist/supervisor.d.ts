@@ -116,9 +116,9 @@ declare class Supervisor extends EventEmitter {
     getTerminalOutput(id: string): string[];
     /**
      * Spawn an agent run (Phase 4)
-     * Creates a supervised process for an AI agent
+     * Creates a supervised OpenClaw-backed process for an AI agent
      */
-    spawnAgentRun(projectId: string, agentInstanceId: string, agentDefinition: any, prompt: string, contextPackId: string): Promise<string>;
+    spawnAgentRun(projectId: string, agentInstanceId: string, agentDefinition: any, prompt: string, contextPackId: string, cwd: string): Promise<string>;
     /**
      * Shutdown cleanup
      */

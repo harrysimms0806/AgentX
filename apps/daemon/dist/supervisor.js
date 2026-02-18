@@ -44,6 +44,7 @@ const path_1 = __importDefault(require("path"));
 const child_process_1 = require("child_process");
 const node_pty_1 = require("node-pty");
 const events_1 = require("events");
+const openclaw_adapter_1 = require("./openclaw-adapter");
 class Supervisor extends events_1.EventEmitter {
     runs = new Map();
     logsDir = '';
@@ -133,7 +134,7 @@ class Supervisor extends events_1.EventEmitter {
             for (const run of persistedRuns) {
                 // Mark previously running runs as stale
                 if (run.status === 'running') {
-                    run.status = 'error';
+                    run.status = 'failed';
                     run.summary = 'Daemon restart - session stale';
                     run.endedAt = new Date().toISOString();
                     console.log(`⚠️ Marked stale run: ${run.id}`);
@@ -173,7 +174,7 @@ class Supervisor extends events_1.EventEmitter {
             projectId,
             type,
             ownerAgentId,
-            status: 'pending',
+            status: 'queued',
             logsPath: path_1.default.join(this.logsDir, `${id}.log`),
             outputBuffer: [],
             bufferedBytes: 0,
@@ -202,6 +203,7 @@ class Supervisor extends events_1.EventEmitter {
             throw new Error('Run not found');
         run.status = 'running';
         run.startedAt = new Date().toISOString();
+        this.emit('run:status', this.toPublicRun(run));
         // Spawn process with structured command
         const child = (0, child_process_1.spawn)(cmd, args, {
             cwd,
@@ -229,6 +231,7 @@ class Supervisor extends events_1.EventEmitter {
             // Check log file size before writing
             this.checkLogSize(run);
             run.logStream?.write(line);
+            this.emit('run:output', { runId: run.id, projectId: run.projectId, chunk: line, stream: 'stdout' });
         });
         child.stderr?.on('data', (data) => {
             const line = `stderr: ${data}`;
@@ -248,17 +251,19 @@ class Supervisor extends events_1.EventEmitter {
             // Check log file size before writing
             this.checkLogSize(run);
             run.logStream?.write(line);
+            this.emit('run:output', { runId: run.id, projectId: run.projectId, chunk: line, stream: 'stderr' });
         });
         child.on('close', (code) => {
             // Preserve terminal states that may have been set by explicit kill/timeout handling
             if (run.status !== 'killed') {
-                run.status = code === 0 ? 'completed' : 'error';
+                run.status = code === 0 ? 'succeeded' : 'failed';
             }
             run.exitCode = code ?? undefined;
             run.endedAt = new Date().toISOString();
             run.logStream?.end();
             // Persist final state
             this.persistRuns();
+            this.emit('run:status', this.toPublicRun(run));
             console.log(`⏹️ Run ${runId} finished with code ${code}`);
         });
         // Set timeout (use run-specific timeout if set, otherwise use default)
@@ -286,6 +291,7 @@ class Supervisor extends events_1.EventEmitter {
             run.endedAt = new Date().toISOString();
             run.summary = `Killed: ${reason}`;
             this.persistRuns();
+            this.emit('run:status', this.toPublicRun(run));
             return true;
         }
         console.log(`🛑 Killing run ${runId} (${reason})`);
@@ -317,6 +323,7 @@ class Supervisor extends events_1.EventEmitter {
         run.summary = `Killed: ${reason}`;
         // Persist state change
         this.persistRuns();
+        this.emit('run:status', this.toPublicRun(run));
         return true;
     }
     /**
@@ -377,7 +384,7 @@ class Supervisor extends events_1.EventEmitter {
     markStaleSessions() {
         for (const run of this.runs.values()) {
             if (run.status === 'running') {
-                run.status = 'error';
+                run.status = 'failed';
                 run.summary = 'Daemon restart - session stale';
                 run.endedAt = new Date().toISOString();
             }
@@ -438,7 +445,7 @@ class Supervisor extends events_1.EventEmitter {
     cleanupRuns(projectId, maxAgeMs = 24 * 60 * 60 * 1000) {
         let cleaned = 0;
         for (const run of this.runs.values()) {
-            // Clean up completed/error/killed runs older than maxAge
+            // Clean up completed/failed/killed runs older than maxAge
             if (run.endedAt && run.status !== 'running') {
                 const endedTime = new Date(run.endedAt).getTime();
                 const age = Date.now() - endedTime;
@@ -648,12 +655,11 @@ class Supervisor extends events_1.EventEmitter {
     }
     /**
      * Spawn an agent run (Phase 4)
-     * Creates a supervised process for an AI agent
+     * Creates a supervised OpenClaw-backed process for an AI agent
      */
-    async spawnAgentRun(projectId, agentInstanceId, agentDefinition, prompt, contextPackId) {
+    async spawnAgentRun(projectId, agentInstanceId, agentDefinition, prompt, contextPackId, cwd) {
         const id = `agent-run-${(0, crypto_1.randomUUID)()}`;
         const now = new Date().toISOString();
-        // Create log file
         const logFile = path_1.default.join(this.logsDir, `${id}.log`);
         const logStream = fs_1.default.createWriteStream(logFile, { flags: 'a' });
         const run = {
@@ -661,7 +667,7 @@ class Supervisor extends events_1.EventEmitter {
             projectId,
             type: 'agent',
             ownerAgentId: agentInstanceId,
-            status: 'running',
+            status: 'queued',
             pid: undefined,
             startedAt: now,
             logsPath: logFile,
@@ -670,19 +676,78 @@ class Supervisor extends events_1.EventEmitter {
             logStream,
         };
         this.runs.set(id, run);
-        // Log agent start
-        logStream.write(`=== Agent Run: ${id} ===\n`);
-        logStream.write(`Agent: ${agentDefinition.name} (${agentDefinition.id})\n`);
-        logStream.write(`Prompt: ${prompt}\n`);
-        logStream.write(`Context: ${contextPackId}\n`);
-        logStream.write(`Started: ${now}\n`);
-        logStream.write(`===\n\n`);
-        // For Phase 4, we're creating the run record
-        // The actual agent execution will be implemented in Phase 5
-        // For now, simulate a placeholder process
-        run.status = 'pending';
+        logStream.write(`=== Agent Run: ${id} ===
+`);
+        logStream.write(`Agent: ${agentDefinition.name} (${agentDefinition.id})
+`);
+        logStream.write(`Context: ${contextPackId}
+`);
+        logStream.write(`Started: ${now}
+`);
+        logStream.write(`===
+
+`);
         run.summary = `Agent ${agentDefinition.name} queued for execution`;
         this.persistRuns();
+        this.emit('run:status', this.toPublicRun(run));
+        run.status = 'running';
+        this.persistRuns();
+        this.emit('run:status', this.toPublicRun(run));
+        const handle = openclaw_adapter_1.openclawAdapter.runTask({
+            projectId,
+            agentId: agentDefinition.id,
+            prompt,
+            cwd,
+            timeoutMs: run.timeoutMs || this.defaultTimeout,
+            onStart: (pid) => {
+                run.pid = pid;
+            },
+            onStdout: (chunk) => {
+                const lineBytes = Buffer.byteLength(chunk, 'utf8');
+                while (run.outputBuffer.length > 0 && run.bufferedBytes + lineBytes > this.maxOutputBuffer) {
+                    const removed = run.outputBuffer.shift();
+                    if (removed) {
+                        run.bufferedBytes -= Buffer.byteLength(removed, 'utf8');
+                    }
+                }
+                run.outputBuffer.push(chunk);
+                run.bufferedBytes += lineBytes;
+                this.checkLogSize(run);
+                run.logStream?.write(chunk);
+                this.emit('run:output', { runId: run.id, projectId: run.projectId, chunk, stream: 'stdout' });
+            },
+            onStderr: (chunk) => {
+                const prefixed = `stderr: ${chunk}`;
+                const lineBytes = Buffer.byteLength(prefixed, 'utf8');
+                while (run.outputBuffer.length > 0 && run.bufferedBytes + lineBytes > this.maxOutputBuffer) {
+                    const removed = run.outputBuffer.shift();
+                    if (removed) {
+                        run.bufferedBytes -= Buffer.byteLength(removed, 'utf8');
+                    }
+                }
+                run.outputBuffer.push(prefixed);
+                run.bufferedBytes += lineBytes;
+                this.checkLogSize(run);
+                run.logStream?.write(prefixed);
+                this.emit('run:output', { runId: run.id, projectId: run.projectId, chunk: prefixed, stream: 'stderr' });
+            },
+            onTimeout: () => {
+                void this.killRun(run.id, 'timeout');
+            },
+        });
+        run.process = handle.process;
+        run.pid = handle.process.pid;
+        handle.process.on('close', (code) => {
+            if (run.status !== 'killed') {
+                run.status = code === 0 ? 'succeeded' : 'failed';
+            }
+            run.exitCode = code ?? undefined;
+            run.endedAt = new Date().toISOString();
+            run.summary = run.status === 'succeeded' ? 'Agent run completed successfully' : run.summary || 'Agent run failed';
+            run.logStream?.end();
+            this.persistRuns();
+            this.emit('run:status', this.toPublicRun(run));
+        });
         console.log(`Agent run ${id} created for instance ${agentInstanceId}`);
         return id;
     }

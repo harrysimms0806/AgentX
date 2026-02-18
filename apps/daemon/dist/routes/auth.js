@@ -16,7 +16,7 @@ router.post('/session', (req, res) => {
     }
     const session = auth_1.auth.createSession(clientId);
     // Audit: session created (redacted token)
-    audit_1.audit.logLegacy('system', 'system', 'AUTH_SESSION_CREATE', { clientId, tokenPrefix: session.token.slice(0, 8) + '...' }, 'daemon');
+    audit_1.audit.logLegacy('system', 'system', 'AUTH_SESSION_CREATE', { clientId }, 'daemon');
     res.json({
         token: session.token,
         expiresAt: null, // Sessions don't expire in Phase 0
@@ -37,7 +37,7 @@ protectedRouter.post('/revoke', (req, res) => {
     const revoked = auth_1.auth.revokeSession(token);
     if (revoked) {
         // Audit: session revoked
-        audit_1.audit.logLegacy('system', 'user', 'AUTH_SESSION_REVOKE', { clientId, tokenPrefix: token.slice(0, 8) + '...' }, clientId);
+        audit_1.audit.logLegacy('system', 'user', 'AUTH_SESSION_REVOKE', { clientId }, clientId);
         res.json({ status: 'revoked' });
     }
     else {
