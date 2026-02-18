@@ -74,7 +74,7 @@ declare class Supervisor {
     /**
      * Shutdown cleanup
      */
-    shutdown(): void;
+    shutdown(): Promise<void>;
 }
 export declare const supervisor: Supervisor;
 export {};

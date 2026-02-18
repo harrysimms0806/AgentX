@@ -23,6 +23,7 @@ const auth_3 = require("./routes/auth");
 const projects_1 = require("./routes/projects");
 const filesystem_1 = require("./routes/filesystem");
 const audit_2 = require("./routes/audit");
+const supervisor_2 = require("./routes/supervisor");
 const app = (0, express_1.default)();
 exports.app = app;
 // Security middleware
@@ -57,6 +58,7 @@ app.use('/auth', auth_2.authMiddleware, auth_3.authProtectedRouter); // /auth/re
 app.use('/projects', auth_2.authMiddleware, projects_1.projectsRouter);
 app.use('/fs', auth_2.authMiddleware, filesystem_1.fsRouter);
 app.use('/audit', auth_2.authMiddleware, audit_2.auditRouter);
+app.use('/supervisor', auth_2.authMiddleware, supervisor_2.supervisorRouter);
 // Error handler
 app.use((err, req, res, next) => {
     console.error('Error:', err);
@@ -100,15 +102,15 @@ main().catch((err) => {
     process.exit(1);
 });
 // Graceful shutdown handlers
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
     console.log('\n🛑 Received SIGINT, shutting down...');
-    supervisor_1.supervisor.shutdown();
+    await supervisor_1.supervisor.shutdown();
     audit_1.audit.shutdown();
     process.exit(0);
 });
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
     console.log('\n🛑 Received SIGTERM, shutting down...');
-    supervisor_1.supervisor.shutdown();
+    await supervisor_1.supervisor.shutdown();
     audit_1.audit.shutdown();
     process.exit(0);
 });

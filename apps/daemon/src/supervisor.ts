@@ -426,10 +426,67 @@ class Supervisor {
   /**
    * Shutdown cleanup
    */
-  shutdown(): void {
+  async shutdown(): Promise<void> {
     if (this.rotationInterval) {
       clearInterval(this.rotationInterval);
     }
+
+    // Kill all running processes before persisting
+    const runningRuns = Array.from(this.runs.values()).filter(r => r.status === 'running');
+    if (runningRuns.length > 0) {
+      console.log(`🛑 Shutting down ${runningRuns.length} running process(es)...`);
+
+      // Create kill promises for all running processes
+      const killPromises = runningRuns.map(run => {
+        return new Promise<void>((resolve) => {
+          if (!run.process) {
+            resolve();
+            return;
+          }
+
+          const pid = run.process.pid;
+          if (!pid) {
+            run.process.kill('SIGTERM');
+            resolve();
+            return;
+          }
+
+          // Send SIGTERM first
+          run.process.kill('SIGTERM');
+
+          // Wait for process to exit or force kill after timeout
+          const checkInterval = setInterval(() => {
+            try {
+              process.kill(pid, 0); // Still alive
+            } catch (err) {
+              // Process dead
+              clearInterval(checkInterval);
+              resolve();
+            }
+          }, 100);
+
+          // Force kill after 2 seconds
+          setTimeout(() => {
+            clearInterval(checkInterval);
+            try {
+              process.kill(pid, 'SIGKILL');
+            } catch (err) {
+              // Already dead
+            }
+            resolve();
+          }, 2000);
+        });
+      });
+
+      // Wait for all kills with a max timeout
+      await Promise.race([
+        Promise.all(killPromises),
+        new Promise(resolve => setTimeout(resolve, 5000)) // 5s max shutdown time
+      ]);
+
+      console.log('✅ All processes terminated');
+    }
+
     // Persist final state
     this.persistRuns();
     console.log('🔧 Supervisor shutdown complete');
