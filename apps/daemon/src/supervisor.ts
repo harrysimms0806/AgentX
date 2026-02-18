@@ -6,6 +6,7 @@ import { spawn, ChildProcess } from 'child_process';
 import { spawn as spawnPty, type IPty } from 'node-pty';
 import { EventEmitter } from 'events';
 import { Run } from '@agentx/api-types';
+import { openclawAdapter } from './openclaw-adapter';
 
 interface RunRecord extends Run {
   process?: ChildProcess;
@@ -134,7 +135,7 @@ class Supervisor extends EventEmitter {
       for (const run of persistedRuns) {
         // Mark previously running runs as stale
         if (run.status === 'running') {
-          run.status = 'error';
+          run.status = 'failed';
           run.summary = 'Daemon restart - session stale';
           run.endedAt = new Date().toISOString();
           console.log(`⚠️ Marked stale run: ${run.id}`);
@@ -184,7 +185,7 @@ class Supervisor extends EventEmitter {
       projectId,
       type,
       ownerAgentId,
-      status: 'pending',
+      status: 'queued',
       logsPath: path.join(this.logsDir, `${id}.log`),
       outputBuffer: [],
       bufferedBytes: 0,
@@ -224,6 +225,7 @@ class Supervisor extends EventEmitter {
 
     run.status = 'running';
     run.startedAt = new Date().toISOString();
+    this.emit('run:status', this.toPublicRun(run));
 
     // Spawn process with structured command
     const child = spawn(cmd, args, {
@@ -257,6 +259,7 @@ class Supervisor extends EventEmitter {
       // Check log file size before writing
       this.checkLogSize(run);
       run.logStream?.write(line);
+      this.emit('run:output', { runId: run.id, projectId: run.projectId, chunk: line, stream: 'stdout' });
     });
 
     child.stderr?.on('data', (data) => {
@@ -280,12 +283,13 @@ class Supervisor extends EventEmitter {
       // Check log file size before writing
       this.checkLogSize(run);
       run.logStream?.write(line);
+      this.emit('run:output', { runId: run.id, projectId: run.projectId, chunk: line, stream: 'stderr' });
     });
 
     child.on('close', (code) => {
       // Preserve terminal states that may have been set by explicit kill/timeout handling
       if (run.status !== 'killed') {
-        run.status = code === 0 ? 'completed' : 'error';
+        run.status = code === 0 ? 'succeeded' : 'failed';
       }
       run.exitCode = code ?? undefined;
       run.endedAt = new Date().toISOString();
@@ -293,6 +297,7 @@ class Supervisor extends EventEmitter {
       
       // Persist final state
       this.persistRuns();
+      this.emit('run:status', this.toPublicRun(run));
       
       console.log(`⏹️ Run ${runId} finished with code ${code}`);
     });
@@ -323,6 +328,7 @@ class Supervisor extends EventEmitter {
       run.endedAt = new Date().toISOString();
       run.summary = `Killed: ${reason}`;
       this.persistRuns();
+      this.emit('run:status', this.toPublicRun(run));
       return true;
     }
 
@@ -359,6 +365,7 @@ class Supervisor extends EventEmitter {
     
     // Persist state change
     this.persistRuns();
+    this.emit('run:status', this.toPublicRun(run));
     
     return true;
   }
@@ -425,7 +432,7 @@ class Supervisor extends EventEmitter {
   markStaleSessions(): void {
     for (const run of this.runs.values()) {
       if (run.status === 'running') {
-        run.status = 'error';
+        run.status = 'failed';
         run.summary = 'Daemon restart - session stale';
         run.endedAt = new Date().toISOString();
       }
@@ -494,7 +501,7 @@ class Supervisor extends EventEmitter {
     let cleaned = 0;
     
     for (const run of this.runs.values()) {
-      // Clean up completed/error/killed runs older than maxAge
+      // Clean up completed/failed/killed runs older than maxAge
       if (run.endedAt && run.status !== 'running') {
         const endedTime = new Date(run.endedAt).getTime();
         const age = Date.now() - endedTime;
@@ -730,19 +737,19 @@ class Supervisor extends EventEmitter {
 
   /**
    * Spawn an agent run (Phase 4)
-   * Creates a supervised process for an AI agent
+   * Creates a supervised OpenClaw-backed process for an AI agent
    */
   async spawnAgentRun(
     projectId: string,
     agentInstanceId: string,
     agentDefinition: any,
     prompt: string,
-    contextPackId: string
+    contextPackId: string,
+    cwd: string
   ): Promise<string> {
     const id = `agent-run-${randomUUID()}`;
     const now = new Date().toISOString();
 
-    // Create log file
     const logFile = path.join(this.logsDir, `${id}.log`);
     const logStream = fs.createWriteStream(logFile, { flags: 'a' });
 
@@ -751,7 +758,7 @@ class Supervisor extends EventEmitter {
       projectId,
       type: 'agent',
       ownerAgentId: agentInstanceId,
-      status: 'running',
+      status: 'queued',
       pid: undefined,
       startedAt: now,
       logsPath: logFile,
@@ -762,21 +769,83 @@ class Supervisor extends EventEmitter {
 
     this.runs.set(id, run);
 
-    // Log agent start
-    logStream.write(`=== Agent Run: ${id} ===\n`);
-    logStream.write(`Agent: ${agentDefinition.name} (${agentDefinition.id})\n`);
-    logStream.write(`Prompt: ${prompt}\n`);
-    logStream.write(`Context: ${contextPackId}\n`);
-    logStream.write(`Started: ${now}\n`);
-    logStream.write(`===\n\n`);
+    logStream.write(`=== Agent Run: ${id} ===
+`);
+    logStream.write(`Agent: ${agentDefinition.name} (${agentDefinition.id})
+`);
+    logStream.write(`Context: ${contextPackId}
+`);
+    logStream.write(`Started: ${now}
+`);
+    logStream.write(`===
 
-    // For Phase 4, we're creating the run record
-    // The actual agent execution will be implemented in Phase 5
-    // For now, simulate a placeholder process
-    run.status = 'pending';
+`);
+
     run.summary = `Agent ${agentDefinition.name} queued for execution`;
-
     this.persistRuns();
+    this.emit('run:status', this.toPublicRun(run));
+
+    run.status = 'running';
+    this.persistRuns();
+    this.emit('run:status', this.toPublicRun(run));
+
+    const handle = openclawAdapter.runTask({
+      projectId,
+      agentId: agentDefinition.id,
+      prompt,
+      cwd,
+      timeoutMs: run.timeoutMs || this.defaultTimeout,
+      onStart: (pid) => {
+        run.pid = pid;
+      },
+      onStdout: (chunk) => {
+        const lineBytes = Buffer.byteLength(chunk, 'utf8');
+        while (run.outputBuffer.length > 0 && run.bufferedBytes + lineBytes > this.maxOutputBuffer) {
+          const removed = run.outputBuffer.shift();
+          if (removed) {
+            run.bufferedBytes -= Buffer.byteLength(removed, 'utf8');
+          }
+        }
+        run.outputBuffer.push(chunk);
+        run.bufferedBytes += lineBytes;
+        this.checkLogSize(run);
+        run.logStream?.write(chunk);
+        this.emit('run:output', { runId: run.id, projectId: run.projectId, chunk, stream: 'stdout' });
+      },
+      onStderr: (chunk) => {
+        const prefixed = `stderr: ${chunk}`;
+        const lineBytes = Buffer.byteLength(prefixed, 'utf8');
+        while (run.outputBuffer.length > 0 && run.bufferedBytes + lineBytes > this.maxOutputBuffer) {
+          const removed = run.outputBuffer.shift();
+          if (removed) {
+            run.bufferedBytes -= Buffer.byteLength(removed, 'utf8');
+          }
+        }
+        run.outputBuffer.push(prefixed);
+        run.bufferedBytes += lineBytes;
+        this.checkLogSize(run);
+        run.logStream?.write(prefixed);
+        this.emit('run:output', { runId: run.id, projectId: run.projectId, chunk: prefixed, stream: 'stderr' });
+      },
+      onTimeout: () => {
+        void this.killRun(run.id, 'timeout');
+      },
+    });
+
+    run.process = handle.process;
+    run.pid = handle.process.pid;
+
+    handle.process.on('close', (code) => {
+      if (run.status !== 'killed') {
+        run.status = code === 0 ? 'succeeded' : 'failed';
+      }
+      run.exitCode = code ?? undefined;
+      run.endedAt = new Date().toISOString();
+      run.summary = run.status === 'succeeded' ? 'Agent run completed successfully' : run.summary || 'Agent run failed';
+      run.logStream?.end();
+      this.persistRuns();
+      this.emit('run:status', this.toPublicRun(run));
+    });
 
     console.log(`Agent run ${id} created for instance ${agentInstanceId}`);
     return id;

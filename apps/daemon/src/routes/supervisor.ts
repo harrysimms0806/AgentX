@@ -23,9 +23,7 @@ router.post('/runs', (req, res) => {
   }
 
   const run = supervisor.createRun(projectId, type, clientId, timeoutMs);
-
   audit.logLegacy(projectId, 'user', 'RUN_CREATE', { runId: run.id, type, timeoutMs }, clientId);
-
   res.status(201).json(run);
 });
 
@@ -35,7 +33,6 @@ router.post('/runs/:id/spawn', async (req, res) => {
   const { cmd, args, env } = req.body;
   const clientId = (req as any).session?.clientId || 'unknown';
 
-  // Validate inputs
   if (!cmd || typeof cmd !== 'string') {
     res.status(400).json({ error: 'cmd required (string)' });
     return;
@@ -46,14 +43,12 @@ router.post('/runs/:id/spawn', async (req, res) => {
     return;
   }
 
-  // Get the run
   const run = supervisor.getRun(id);
   if (!run) {
     res.status(404).json({ error: 'Run not found' });
     return;
   }
 
-  // Check project exists and has EXEC_SHELL capability
   const project = projects.get(run.projectId);
   if (!project) {
     res.status(404).json({ error: 'Project not found' });
@@ -65,51 +60,78 @@ router.post('/runs/:id/spawn', async (req, res) => {
     return;
   }
 
-  // Get sandboxed cwd
   const pathResult = sandbox.getProjectPath(run.projectId);
   if (!pathResult.allowed) {
     res.status(403).json({ error: pathResult.error || 'Invalid project path' });
     return;
   }
 
-  const cwd = pathResult.path;
-
-  // Audit the spawn
   audit.logLegacy(run.projectId, 'user', 'RUN_SPAWN', { runId: id, cmd, args }, clientId);
 
-  // Spawn the command
   try {
-    await supervisor.spawnCommand(id, cmd, args, cwd, env);
+    await supervisor.spawnCommand(id, cmd, args, pathResult.path, env);
     res.json({ success: true, message: 'Command spawned', runId: id });
   } catch (err: any) {
     res.status(500).json({ error: `Failed to spawn: ${err.message}` });
   }
 });
 
-// GET /supervisor/runs - List all runs
+// GET /supervisor/runs - List all runs (project-scoped)
 router.get('/runs', (req, res) => {
-  const { projectId } = req.query;
-  const runs = supervisor.listRuns(projectId as string | undefined);
+  const projectId = req.query.projectId as string | undefined;
+  if (!projectId) {
+    res.status(400).json({ error: 'projectId is required' });
+    return;
+  }
+
+  const runs = supervisor.listRuns(projectId);
   res.json({ runs });
 });
 
-// GET /supervisor/runs/:id - Get specific run
+// GET /supervisor/runs/:id - Get specific run (project-scoped)
 router.get('/runs/:id', (req, res) => {
   const { id } = req.params;
-  const run = supervisor.getRun(id);
+  const projectId = req.query.projectId as string | undefined;
+  if (!projectId) {
+    res.status(400).json({ error: 'projectId is required' });
+    return;
+  }
 
+  const run = supervisor.getRun(id);
   if (!run) {
     res.status(404).json({ error: 'Run not found' });
+    return;
+  }
+
+  if (run.projectId !== projectId) {
+    res.status(403).json({ error: 'Run does not belong to provided projectId' });
     return;
   }
 
   res.json(run);
 });
 
-// GET /supervisor/runs/:id/output - Get run output
+// GET /supervisor/runs/:id/output - Get run output (project-scoped)
 router.get('/runs/:id/output', (req, res) => {
   const { id } = req.params;
+  const projectId = req.query.projectId as string | undefined;
   const lines = parseInt(req.query.lines as string) || 50;
+
+  if (!projectId) {
+    res.status(400).json({ error: 'projectId is required' });
+    return;
+  }
+
+  const run = supervisor.getRun(id);
+  if (!run) {
+    res.status(404).json({ error: 'Run not found' });
+    return;
+  }
+
+  if (run.projectId !== projectId) {
+    res.status(403).json({ error: 'Run does not belong to provided projectId' });
+    return;
+  }
 
   const output = supervisor.getRunOutput(id, lines);
   res.json({ output });
@@ -118,8 +140,13 @@ router.get('/runs/:id/output', (req, res) => {
 // POST /supervisor/runs/:id/kill - Kill a run
 router.post('/runs/:id/kill', async (req, res) => {
   const { id } = req.params;
-  const { reason = 'user' } = req.body;
+  const { reason = 'user', projectId } = req.body;
   const clientId = (req as any).session?.clientId || 'unknown';
+
+  if (!projectId) {
+    res.status(400).json({ error: 'projectId is required' });
+    return;
+  }
 
   const run = supervisor.getRun(id);
   if (!run) {
@@ -127,13 +154,17 @@ router.post('/runs/:id/kill', async (req, res) => {
     return;
   }
 
-  if (run.status !== 'running') {
-    res.status(400).json({ error: 'Run is not running' });
+  if (run.projectId !== projectId) {
+    res.status(403).json({ error: 'Run does not belong to provided projectId' });
+    return;
+  }
+
+  if (run.status !== 'running' && run.status !== 'queued') {
+    res.status(400).json({ error: 'Run is not active' });
     return;
   }
 
   const success = await supervisor.killRun(id, reason);
-
   if (success) {
     audit.logLegacy(run.projectId, 'user', 'RUN_KILL', { runId: id, reason }, clientId);
     res.json({ success: true, message: 'Kill signal sent' });
@@ -146,7 +177,7 @@ router.post('/runs/:id/kill', async (req, res) => {
 router.post('/cleanup', (req, res) => {
   const { projectId, maxAgeHours } = req.body;
   const clientId = (req as any).session?.clientId || 'unknown';
-  
+
   const maxAgeMs = maxAgeHours ? maxAgeHours * 60 * 60 * 1000 : undefined;
   const cleaned = supervisor.cleanupRuns(projectId, maxAgeMs);
 

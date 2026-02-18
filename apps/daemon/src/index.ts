@@ -30,6 +30,7 @@ import { locksRouter } from './routes/locks';
 import { gitRouter } from './routes/git';
 import { terminalsRouter } from './routes/terminals';
 import { agentsRouter } from './routes/agents';
+import { runsRouter } from './routes/runs';
 
 const app = express();
 
@@ -80,6 +81,7 @@ app.use('/locks', authMiddleware, locksRouter);
 app.use('/git', authMiddleware, gitRouter);
 app.use('/terminals', authMiddleware, terminalsRouter);
 app.use('/agents', authMiddleware, agentsRouter);
+app.use('/runs', authMiddleware, runsRouter);
 
 // Error handler
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {

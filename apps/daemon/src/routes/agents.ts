@@ -5,6 +5,7 @@ import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { agentManager } from '../agents';
 import { audit } from '../audit';
+import { projects } from '../store/projects';
 
 const router = Router();
 
@@ -117,6 +118,22 @@ router.post('/spawn', async (req, res) => {
   // Validate projectId format
   if (!/^[a-z0-9-]+$/.test(projectId)) {
     res.status(400).json({ error: 'Invalid projectId format' });
+    return;
+  }
+
+  const project = projects.get(projectId);
+  if (!project) {
+    res.status(404).json({ error: 'Project not found' });
+    return;
+  }
+
+  if (!project.settings.capabilities.OPENCLAW_RUN) {
+    res.status(403).json({ error: 'OpenClaw runs are disabled for this project (OPENCLAW_RUN off)' });
+    return;
+  }
+
+  if (project.settings.safeMode) {
+    res.status(403).json({ error: 'OpenClaw run blocked: safe mode is enabled for this project' });
     return;
   }
 

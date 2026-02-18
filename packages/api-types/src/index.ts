@@ -74,7 +74,7 @@ export interface Run {
   projectId: string;
   type: 'agent' | 'command' | 'git' | 'index';
   ownerAgentId?: string;
-  status: 'pending' | 'running' | 'completed' | 'error' | 'killed';
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'killed';
   pid?: number;  // Process ID when running
   startedAt?: string;
   endedAt?: string;

@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import { runDb } from './database';
 import { audit } from './audit';
 import { supervisor } from './supervisor';
+import { sandbox } from './sandbox';
 import type { Run } from '@agentx/api-types';
 
 // Agent types based on role
@@ -279,12 +280,18 @@ class AgentManager {
 
     // Create run via supervisor
     const definition = this.definitions.get(definitionId)!;
+    const projectPath = sandbox.getProjectPath(projectId);
+    if (!projectPath.allowed || !projectPath.path) {
+      throw new Error(projectPath.error || 'Invalid project path');
+    }
+
     const runId = await supervisor.spawnAgentRun(
       projectId,
       instance.id,
       definition,
       prompt,
-      instance.contextPackId!
+      instance.contextPackId!,
+      projectPath.path
     );
 
     instance.runId = runId;
