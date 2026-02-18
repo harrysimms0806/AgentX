@@ -10,14 +10,30 @@ const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const sandbox_1 = require("../sandbox");
 const audit_1 = require("../audit");
+const projects_1 = require("../store/projects");
 const router = (0, express_1.Router)();
 exports.fsRouter = router;
 // Helper to check write capabilities
 function canWrite(req, projectId) {
-    // TODO: Check project settings from database
-    // For Phase 0, we check if safeMode is enabled
-    // This is a simplified check - full implementation in Phase 2
-    return { allowed: true }; // Placeholder
+    const project = projects_1.projects.get(projectId);
+    if (!project) {
+        return { allowed: false, error: 'Project not found' };
+    }
+    // Check safeMode - if enabled, no writes allowed
+    if (project.settings.safeMode) {
+        return {
+            allowed: false,
+            error: 'Write denied: project is in safe mode. Disable safeMode to enable writes.'
+        };
+    }
+    // Check FS_WRITE capability
+    if (!project.settings.capabilities.FS_WRITE) {
+        return {
+            allowed: false,
+            error: 'Write denied: FS_WRITE capability not enabled for this project.'
+        };
+    }
+    return { allowed: true };
 }
 // GET /fs/tree?projectId= - Get file tree
 router.get('/tree', (req, res) => {

@@ -74,6 +74,14 @@ declare class Supervisor {
      */
     rotateLogs(): void;
     /**
+     * List all runs (public method for route encapsulation)
+     */
+    listRuns(projectId?: string): Run[];
+    /**
+     * Cleanup old runs (public method for route encapsulation)
+     */
+    cleanupRuns(projectId?: string, maxAgeMs?: number): number;
+    /**
      * Shutdown cleanup
      */
     shutdown(): Promise<void>;

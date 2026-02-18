@@ -5,12 +5,10 @@ import fs from 'fs';
 import path from 'path';
 import { sandbox } from '../sandbox';
 import { audit } from '../audit';
+import { projects } from '../store/projects';
 import { Project, ProjectSettings } from '@agentx/api-types';
 
 const router = Router();
-
-// In-memory store for Phase 0 (replace with SQLite in future)
-const projects: Map<string, Project> = new Map();
 
 // Default project settings
 const defaultSettings: ProjectSettings = {
