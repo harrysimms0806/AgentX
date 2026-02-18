@@ -7,7 +7,7 @@ interface ProjectSwitcherProps {
 export default function ProjectSwitcher({ collapsed }: ProjectSwitcherProps) {
   return (
     <div className="project-switcher">
-      {!collapsed && (>
+      {!collapsed && (
         <>
           <div className="section-title">Projects</div>
           <button className="project-btn">

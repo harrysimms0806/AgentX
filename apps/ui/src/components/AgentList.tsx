@@ -13,7 +13,7 @@ const agents = [
 export default function AgentList({ collapsed }: AgentListProps) {
   return (
     <div className="agent-list">
-      {!collapsed && (>
+      {!collapsed && (
         <>
           <div className="section-title">Agents</div>
           <div className="agents">

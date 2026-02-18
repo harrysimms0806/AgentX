@@ -1,6 +1,5 @@
 'use client';
 
-import { useState, useEffect } from 'react';
 import Sidebar from '@/components/Layout/Sidebar';
 import StatusBar from '@/components/Layout/StatusBar';
 import { DaemonProvider } from '@/contexts/DaemonContext';

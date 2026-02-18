@@ -1,95 +1,198 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createSessionToken, getDiscovery, getHealth, type HealthResponse } from '@/lib/daemon/client';
+import { RETRY_CONFIG } from '@/lib/daemon/config';
 
-interface HealthResponse {
-  status: string;
-  version: string;
-  uptime: number;
-  daemonPort: number;
-  uiPort: number;
-  timestamp: string;
-}
+export type DaemonConnectionState =
+  | 'starting'
+  | 'retrying'
+  | 'connected'
+  | 'disconnected'
+  | 'runtime-missing'
+  | 'auth-failed';
 
 interface DaemonContextType {
+  connectionState: DaemonConnectionState;
   connected: boolean;
   health: HealthResponse | null;
-  currentProject: string | null;
-  safeMode: boolean;
+  daemonPort: number | null;
+  daemonUrl: string | null;
+  discoverySource: string | null;
+  currentProject: string;
+  safeModeLabel: string;
   activeRuns: number;
   token: string | null;
+  statusMessage: string;
+  retryAttempt: number;
+  lastHealthAt: string | null;
+  lastAuthAt: string | null;
 }
 
 const DaemonContext = createContext<DaemonContextType>({
+  connectionState: 'starting',
   connected: false,
   health: null,
-  currentProject: null,
-  safeMode: true,
+  daemonPort: null,
+  daemonUrl: null,
+  discoverySource: null,
+  currentProject: 'No project selected',
+  safeModeLabel: 'Safe mode: on',
   activeRuns: 0,
   token: null,
+  statusMessage: 'Waiting for daemon discovery…',
+  retryAttempt: 0,
+  lastHealthAt: null,
+  lastAuthAt: null,
 });
 
+function getDelayMs(attempt: number) {
+  const delay = RETRY_CONFIG.initialDelayMs * RETRY_CONFIG.multiplier ** Math.max(0, attempt - 1);
+  return Math.min(RETRY_CONFIG.maxDelayMs, Math.round(delay));
+}
+
 export function DaemonProvider({ children }: { children: React.ReactNode }) {
-  const [connected, setConnected] = useState(false);
+  const [connectionState, setConnectionState] = useState<DaemonConnectionState>('starting');
   const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [daemonUrl, setDaemonUrl] = useState<string | null>(null);
+  const [daemonPort, setDaemonPort] = useState<number | null>(null);
+  const [discoverySource, setDiscoverySource] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState('Waiting for daemon discovery…');
+  const [retryAttempt, setRetryAttempt] = useState(0);
+  const [lastHealthAt, setLastHealthAt] = useState<string | null>(null);
+  const [lastAuthAt, setLastAuthAt] = useState<string | null>(null);
 
   useEffect(() => {
-    // Check daemon health
-    const checkHealth = async () => {
-      try {
-        const res = await fetch('/api/daemon/health');
-        if (res.ok) {
-          const data = await res.json();
-          setHealth(data);
-          setConnected(true);
+    let active = true;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleRetry = (attempt: number) => {
+      const delayMs = getDelayMs(attempt);
+      timeoutId = setTimeout(() => {
+        void poll(attempt + 1);
+      }, delayMs);
+    };
+
+    const poll = async (attempt = 1) => {
+      if (!active) {
+        return;
+      }
+
+      setRetryAttempt(attempt);
+      setConnectionState(attempt > 1 ? 'retrying' : 'starting');
+
+      const discovery = await getDiscovery();
+      if (!discovery.ok) {
+        if (!active) {
+          return;
+        }
+
+        if (discovery.error.code === 'RUNTIME_MISSING') {
+          setConnectionState('runtime-missing');
+          setStatusMessage('Runtime file missing. Start daemon to generate ~/.agentx/runtime.json.');
         } else {
-          setConnected(false);
+          setConnectionState('disconnected');
+          setStatusMessage('Runtime discovery failed. Verify ~/.agentx/runtime.json content.');
         }
-      } catch {
-        setConnected(false);
+        setHealth(null);
+        setLastHealthAt(null);
+        scheduleRetry(attempt);
+        return;
       }
+
+      setDaemonUrl(discovery.data.daemonUrl);
+      setDaemonPort(discovery.data.daemonPort);
+      setDiscoverySource(discovery.data.source);
+
+      const healthResult = await getHealth();
+      if (!healthResult.ok) {
+        if (!active) {
+          return;
+        }
+
+        setConnectionState('disconnected');
+        setHealth(null);
+        setLastHealthAt(null);
+        setStatusMessage('Daemon not running yet. Retrying connection…');
+        scheduleRetry(attempt);
+        return;
+      }
+
+      const session = await createSessionToken();
+      if (!session.ok) {
+        if (!active) {
+          return;
+        }
+
+        if (session.status === 401 || session.status === 403) {
+          setConnectionState('auth-failed');
+          setStatusMessage('Not authorised / session expired.');
+        } else {
+          setConnectionState('disconnected');
+          setStatusMessage('Unable to create daemon session. Retrying…');
+        }
+        setToken(null);
+        scheduleRetry(attempt);
+        return;
+      }
+
+      if (!active) {
+        return;
+      }
+
+      const nowIso = new Date().toISOString();
+      setToken(session.token);
+      setHealth(healthResult.data);
+      setLastHealthAt(nowIso);
+      setLastAuthAt(nowIso);
+      setConnectionState('connected');
+      setStatusMessage(`Connected to daemon on port ${healthResult.data.daemonPort}.`);
+      scheduleRetry(1);
     };
 
-    checkHealth();
-    const interval = setInterval(checkHealth, 5000);
+    void poll();
 
-    // Get auth token
-    const getToken = async () => {
-      try {
-        const res = await fetch('/api/daemon/auth/session', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ clientId: 'agentx-ui' }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setToken(data.token);
-        }
-      } catch (err) {
-        console.error('Failed to get token:', err);
+    return () => {
+      active = false;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
       }
     };
-
-    getToken();
-
-    return () => clearInterval(interval);
   }, []);
 
-  return (
-    <DaemonContext.Provider
-      value={{
-        connected,
-        health,
-        currentProject: null, // TODO: Load from storage
-        safeMode: true,
-        activeRuns: 0,
-        token,
-      }}
-    >
-      {children}
-    </DaemonContext.Provider>
+  const value = useMemo(
+    () => ({
+      connectionState,
+      connected: connectionState === 'connected',
+      health,
+      daemonPort,
+      daemonUrl,
+      discoverySource,
+      currentProject: 'No project selected',
+      safeModeLabel: 'Safe mode: on',
+      activeRuns: 0,
+      token,
+      statusMessage,
+      retryAttempt,
+      lastHealthAt,
+      lastAuthAt,
+    }),
+    [
+      connectionState,
+      health,
+      daemonPort,
+      daemonUrl,
+      discoverySource,
+      token,
+      statusMessage,
+      retryAttempt,
+      lastHealthAt,
+      lastAuthAt,
+    ]
   );
+
+  return <DaemonContext.Provider value={value}>{children}</DaemonContext.Provider>;
 }
 
 export const useDaemon = () => useContext(DaemonContext);
