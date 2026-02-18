@@ -1,7 +1,6 @@
 // Sandbox filesystem enforcement
 import fs from 'fs';
 import path from 'path';
-import { config } from './config';
 
 interface SandboxCheck {
   allowed: boolean;
@@ -10,7 +9,8 @@ interface SandboxCheck {
 }
 
 class Sandbox {
-  private root: string;
+  private root: string = '';
+  private realRoot: string = '';
   private denyList: string[] = [
     '.ssh',
     '.gnupg',
@@ -24,11 +24,12 @@ class Sandbox {
     '.env', // .env outside project context
   ];
 
-  constructor() {
-    this.root = config.sandboxRoot;
-  }
-
   async initialize(): Promise<void> {
+    // Get config at initialization time (after port discovery)
+    const { config } = await import('./config');
+    this.root = config.sandboxRoot;
+    this.realRoot = fs.realpathSync(this.root);
+    
     // Ensure sandbox root exists
     if (!fs.existsSync(this.root)) {
       fs.mkdirSync(this.root, { recursive: true });
@@ -43,13 +44,59 @@ class Sandbox {
   }
 
   /**
+   * Validate project ID format to prevent traversal attacks
+   * Only allows lowercase letters, numbers, and hyphens
+   */
+  private validateProjectId(projectId: string): { valid: boolean; error?: string } {
+    // Reject any path traversal attempts
+    if (projectId.includes('..') || projectId.includes('/') || projectId.includes('\\')) {
+      return { valid: false, error: 'Invalid project ID format: path traversal detected' };
+    }
+    
+    // Enforce safe project ID format: lowercase letters, numbers, hyphens only
+    const safeProjectIdPattern = /^[a-z0-9-]+$/;
+    if (!safeProjectIdPattern.test(projectId)) {
+      return { valid: false, error: 'Invalid project ID format: only lowercase letters, numbers, and hyphens allowed' };
+    }
+    
+    return { valid: true };
+  }
+
+  /**
+   * Boundary-safe check: ensure path is within sandbox root
+   * Uses path.relative to detect escape attempts
+   */
+  private isWithinSandbox(realPath: string): boolean {
+    // Get relative path from sandbox root
+    const relative = path.relative(this.realRoot, realPath);
+    
+    // Path is outside sandbox if:
+    // 1. relative starts with '..' (going above root)
+    // 2. relative is absolute (different drive on Windows, or somehow absolute)
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      return false;
+    }
+    
+    return true;
+  }
+
+  /**
    * Validate and resolve a path within the sandbox
-   * @param projectId - The project context
+   * @param projectId - The project context (validated for safe format)
    * @param relativePath - Path relative to project root
    * @returns SandboxCheck with result
    */
   validatePath(projectId: string, relativePath: string): SandboxCheck {
-    // Prevent path traversal
+    // Validate project ID format first
+    const projectIdCheck = this.validateProjectId(projectId);
+    if (!projectIdCheck.valid) {
+      return {
+        allowed: false,
+        error: projectIdCheck.error,
+      };
+    }
+
+    // Prevent path traversal in relativePath
     if (relativePath.includes('..')) {
       return {
         allowed: false,
@@ -57,9 +104,24 @@ class Sandbox {
       };
     }
 
-    // Resolve to absolute path within project
-    const projectPath = path.join(this.root, projectId);
-    const targetPath = path.join(projectPath, relativePath);
+    // Canonicalize project root with safe project ID
+    const projectRoot = path.join(this.realRoot, projectId);
+    let realProjectRoot: string;
+    try {
+      // Create project directory if it doesn't exist
+      if (!fs.existsSync(projectRoot)) {
+        fs.mkdirSync(projectRoot, { recursive: true });
+      }
+      realProjectRoot = fs.realpathSync(projectRoot);
+    } catch (err) {
+      return {
+        allowed: false,
+        error: `Failed to resolve project root: ${err}`,
+      };
+    }
+
+    // Resolve target path within canonicalized project root
+    const targetPath = path.join(realProjectRoot, relativePath);
     
     // Use realpath to resolve symlinks and get canonical path
     let realPath: string;
@@ -85,13 +147,22 @@ class Sandbox {
       };
     }
 
-    // Ensure real path is within sandbox
-    const realRoot = fs.realpathSync(this.root);
-    if (!realPath.startsWith(realRoot)) {
+    // Ensure real path is within sandbox using boundary-safe check
+    if (!this.isWithinSandbox(realPath)) {
       return {
         allowed: false,
         realPath,
         error: 'Access denied: outside sandbox',
+      };
+    }
+
+    // Ensure real path is within the specific project (prevent cross-project access)
+    const relativeToProject = path.relative(realProjectRoot, realPath);
+    if (relativeToProject.startsWith('..') || path.isAbsolute(relativeToProject)) {
+      return {
+        allowed: false,
+        realPath,
+        error: 'Access denied: outside project boundary',
       };
     }
 
@@ -113,13 +184,29 @@ class Sandbox {
 
   /**
    * Get trash directory path for a project
+   * Uses boundary-safe validation
    */
-  getTrashPath(projectId: string): string {
-    const trashDir = path.join(this.root, '.agentx-trash', projectId);
+  getTrashPath(projectId: string): { path: string; allowed: boolean; error?: string } {
+    // Validate project ID format
+    const projectIdCheck = this.validateProjectId(projectId);
+    if (!projectIdCheck.valid) {
+      return { path: '', allowed: false, error: projectIdCheck.error };
+    }
+
+    // Build trash path within sandbox root
+    const trashDir = path.join(this.realRoot, '.agentx-trash', projectId);
+    
+    // Verify trash path is within sandbox
+    if (!this.isWithinSandbox(trashDir)) {
+      return { path: '', allowed: false, error: 'Trash path outside sandbox' };
+    }
+
+    // Create if doesn't exist
     if (!fs.existsSync(trashDir)) {
       fs.mkdirSync(trashDir, { recursive: true });
     }
-    return trashDir;
+    
+    return { path: trashDir, allowed: true };
   }
 
   /**
@@ -129,10 +216,17 @@ class Sandbox {
     const check = this.validatePath(projectId, relativePath);
     if (!check.allowed) return check;
 
-    const trashDir = this.getTrashPath(projectId);
+    const trashCheck = this.getTrashPath(projectId);
+    if (!trashCheck.allowed) {
+      return {
+        allowed: false,
+        error: trashCheck.error || 'Invalid trash path',
+      };
+    }
+
     const timestamp = Date.now();
     const trashName = `${path.basename(relativePath)}.${timestamp}`;
-    const trashPath = path.join(trashDir, trashName);
+    const trashPath = path.join(trashCheck.path, trashName);
 
     try {
       fs.renameSync(check.realPath!, trashPath);
@@ -151,17 +245,42 @@ class Sandbox {
   /**
    * Create project directory
    */
-  createProject(projectId: string): boolean {
-    const projectPath = path.join(this.root, projectId);
+  createProject(projectId: string): { success: boolean; error?: string } {
+    // Validate project ID format
+    const projectIdCheck = this.validateProjectId(projectId);
+    if (!projectIdCheck.valid) {
+      return { success: false, error: projectIdCheck.error };
+    }
+
+    const projectPath = path.join(this.realRoot, projectId);
+    
+    // Ensure project path is within sandbox
+    if (!this.isWithinSandbox(projectPath)) {
+      return { success: false, error: 'Project path outside sandbox' };
+    }
+
     if (fs.existsSync(projectPath)) {
-      return false;
+      return { success: false, error: 'Project already exists' };
     }
     fs.mkdirSync(projectPath, { recursive: true });
-    return true;
+    return { success: true };
   }
 
-  getProjectPath(projectId: string): string {
-    return path.join(this.root, projectId);
+  getProjectPath(projectId: string): { path: string; allowed: boolean; error?: string } {
+    // Validate project ID format
+    const projectIdCheck = this.validateProjectId(projectId);
+    if (!projectIdCheck.valid) {
+      return { path: '', allowed: false, error: projectIdCheck.error };
+    }
+
+    const projectPath = path.join(this.realRoot, projectId);
+    
+    // Ensure project path is within sandbox
+    if (!this.isWithinSandbox(projectPath)) {
+      return { path: '', allowed: false, error: 'Project path outside sandbox' };
+    }
+
+    return { path: projectPath, allowed: true };
   }
 }
 

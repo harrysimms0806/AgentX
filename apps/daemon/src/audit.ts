@@ -1,19 +1,37 @@
 // Append-only audit logging
 import fs from 'fs';
 import { randomUUID } from 'crypto';
-import { config } from './config';
 import { AuditEvent } from '@agentx/api-types';
 
 class Audit {
-  private logPath: string;
+  private logPath: string = '';
   private buffer: string[] = [];
   private flushInterval: NodeJS.Timeout | null = null;
-
-  constructor() {
-    this.logPath = config.auditLogPath;
-  }
+  
+  // Sensitive keys that should be redacted from logs
+  private sensitiveKeys: string[] = [
+    'token',
+    'authorization',
+    'password',
+    'secret',
+    'key',
+    'apiKey',
+    'api_key',
+    'privateKey',
+    'private_key',
+    'accessToken',
+    'access_token',
+    'refreshToken',
+    'refresh_token',
+    'credential',
+    'credentials',
+  ];
 
   async initialize(): Promise<void> {
+    // Get config at initialization time (after port discovery)
+    const { config } = await import('./config');
+    this.logPath = config.auditLogPath;
+    
     // Ensure log file exists
     if (!fs.existsSync(this.logPath)) {
       fs.writeFileSync(this.logPath, '');
@@ -23,6 +41,31 @@ class Audit {
     
     // Start periodic flush
     this.flushInterval = setInterval(() => this.flush(), 5000);
+  }
+
+  /**
+   * Redact sensitive values from payload
+   */
+  private redactPayload(payload: Record<string, unknown>): Record<string, unknown> {
+    const redacted: Record<string, unknown> = {};
+    
+    for (const [key, value] of Object.entries(payload)) {
+      // Check if key matches any sensitive pattern (case-insensitive)
+      const isSensitive = this.sensitiveKeys.some(
+        sensitive => key.toLowerCase().includes(sensitive.toLowerCase())
+      );
+      
+      if (isSensitive) {
+        redacted[key] = '[REDACTED]';
+      } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+        // Recursively redact nested objects
+        redacted[key] = this.redactPayload(value as Record<string, unknown>);
+      } else {
+        redacted[key] = value;
+      }
+    }
+    
+    return redacted;
   }
 
   /**
@@ -36,13 +79,16 @@ class Audit {
     payload: Record<string, unknown>,
     actorId?: string
   ): AuditEvent {
+    // Redact sensitive fields from payload
+    const safePayload = this.redactPayload(payload);
+    
     const event: AuditEvent = {
       id: randomUUID(),
       projectId,
       actorType,
       actorId,
       actionType,
-      payload,
+      payload: safePayload,
       createdAt: new Date().toISOString(),
     };
 

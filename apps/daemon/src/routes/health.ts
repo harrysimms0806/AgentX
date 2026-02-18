@@ -11,6 +11,8 @@ router.get('/', (req, res) => {
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     sandbox: config.sandboxRoot,
+    daemonPort: config.port,
+    uiPort: config.uiPort,
   });
 });
 

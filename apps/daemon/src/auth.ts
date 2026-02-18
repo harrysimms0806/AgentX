@@ -2,7 +2,6 @@
 import { randomBytes, randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { config } from './config';
 
 interface Session {
   token: string;
@@ -13,14 +12,14 @@ interface Session {
 
 class Auth {
   private sessions: Map<string, Session> = new Map();
-  private sessionsFile: string;
+  private sessionsFile: string = '';
   private enabled = true;
 
-  constructor() {
-    this.sessionsFile = path.join(config.runtimeDir, 'sessions.json');
-  }
-
   async initialize(): Promise<void> {
+    // Get config at initialization time (after port discovery)
+    const { config } = await import('./config');
+    this.sessionsFile = path.join(config.runtimeDir, 'sessions.json');
+    
     // Load existing sessions
     if (fs.existsSync(this.sessionsFile)) {
       try {
