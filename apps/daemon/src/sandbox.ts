@@ -28,13 +28,15 @@ class Sandbox {
     // Get config at initialization time (after port discovery)
     const { config } = await import('./config');
     this.root = config.sandboxRoot;
-    this.realRoot = fs.realpathSync(this.root);
     
-    // Ensure sandbox root exists
+    // Ensure sandbox root exists BEFORE calling realpathSync
     if (!fs.existsSync(this.root)) {
       fs.mkdirSync(this.root, { recursive: true });
       console.log(`📁 Created sandbox root: ${this.root}`);
     }
+    
+    // Now safe to get realpath
+    this.realRoot = fs.realpathSync(this.root);
     
     // Ensure trash directory exists
     const trashDir = path.join(this.root, '.agentx-trash');
