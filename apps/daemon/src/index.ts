@@ -1,5 +1,5 @@
-// AgentX Daemon - Phase 2 Implementation
-// Core daemon with auth, sandbox, audit, supervisor + SQLite persistence, locks
+// AgentX Daemon - Phase 3 Implementation
+// Core daemon + SQLite persistence + WebSocket terminals
 
 import express from 'express';
 import cors from 'cors';
@@ -16,6 +16,8 @@ import { sandbox } from './sandbox';
 import { audit } from './audit';
 import { supervisor } from './supervisor';
 import { initDatabase, closeDatabase } from './database';
+import { terminalManager } from './terminal';
+import { wsServer } from './websocket';
 import { authMiddleware } from './middleware/auth';
 import { healthRouter } from './routes/health';
 import { authPublicRouter, authProtectedRouter } from './routes/auth';
@@ -24,6 +26,8 @@ import { fsRouter } from './routes/filesystem';
 import { auditRouter } from './routes/audit';
 import { supervisorRouter } from './routes/supervisor';
 import { locksRouter } from './routes/locks';
+import { gitRouter } from './routes/git';
+import { terminalsRouter } from './routes/terminals';
 
 const app = express();
 
@@ -71,6 +75,8 @@ app.use('/fs', authMiddleware, fsRouter);
 app.use('/audit', authMiddleware, auditRouter);
 app.use('/supervisor', authMiddleware, supervisorRouter);
 app.use('/locks', authMiddleware, locksRouter);
+app.use('/git', authMiddleware, gitRouter);
+app.use('/terminals', authMiddleware, terminalsRouter);
 
 // Error handler
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -83,23 +89,26 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
 
 // Initialize and start
 async function main() {
-  console.log('🔧 AgentX Daemon - Phase 2');
-  
+  console.log('🔧 AgentX Daemon - Phase 3');
+
   // Initialize config first (includes port discovery)
   await initializeConfig();
-  
+
   console.log(`Sandbox root: ${config.sandboxRoot}`);
-  
+
   // Initialize subsystems
   await auth.initialize();
   await sandbox.initialize();
   await audit.initialize();
   await supervisor.initialize();
-  
+
   // Initialize SQLite database (Phase 2)
   initDatabase();
   console.log('💾 SQLite persistence initialized');
-  
+
+  // Initialize terminal manager (Phase 3)
+  terminalManager.initialize();
+
   // Write runtime config for UI discovery
   // Schema versioned for backward compatibility
   const runtimeConfig = {
@@ -108,7 +117,7 @@ async function main() {
     daemonPort: config.port,
     startedAt: new Date().toISOString(),
   };
-  
+
   const runtimeDir = path.join(os.homedir(), '.agentx');
   if (!fs.existsSync(runtimeDir)) {
     fs.mkdirSync(runtimeDir, { recursive: true });
@@ -117,21 +126,18 @@ async function main() {
     path.join(runtimeDir, 'runtime.json'),
     JSON.stringify(runtimeConfig, null, 2)
   );
-  
+
   // Start server
   const server = http.createServer(app);
 
-  // Explicitly reject websocket upgrades until WS auth is implemented
-  server.on('upgrade', (req, socket) => {
-    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-    socket.destroy();
-  });
+  // Initialize WebSocket server (Phase 3)
+  wsServer.initialize(server);
 
   server.listen(config.port, '127.0.0.1', () => {
     console.log(`✅ Daemon running on http://127.0.0.1:${config.port}`);
     console.log(`📁 Sandbox: ${config.sandboxRoot}`);
     console.log(`🔒 Auth: ${auth.isEnabled() ? 'enabled' : 'disabled'}`);
-    console.log('🔌 WebSocket upgrades: disabled until auth handshake is implemented');
+    console.log('🖥️  WebSocket terminals: enabled on /ws');
   });
 }
 
@@ -143,6 +149,8 @@ main().catch((err) => {
 // Graceful shutdown handlers
 process.on('SIGINT', async () => {
   console.log('\n🛑 Received SIGINT, shutting down...');
+  wsServer.shutdown();
+  terminalManager.shutdown();
   await supervisor.shutdown();
   audit.shutdown();
   closeDatabase();
@@ -151,6 +159,8 @@ process.on('SIGINT', async () => {
 
 process.on('SIGTERM', async () => {
   console.log('\n🛑 Received SIGTERM, shutting down...');
+  wsServer.shutdown();
+  terminalManager.shutdown();
   await supervisor.shutdown();
   audit.shutdown();
   closeDatabase();

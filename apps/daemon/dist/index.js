@@ -1,6 +1,6 @@
 "use strict";
-// AgentX Daemon - Phase 2 Implementation
-// Core daemon with auth, sandbox, audit, supervisor + SQLite persistence, locks, git
+// AgentX Daemon - Phase 3 Implementation
+// Core daemon + SQLite persistence + WebSocket terminals
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -19,6 +19,8 @@ const sandbox_1 = require("./sandbox");
 const audit_1 = require("./audit");
 const supervisor_1 = require("./supervisor");
 const database_1 = require("./database");
+const terminal_1 = require("./terminal");
+const websocket_1 = require("./websocket");
 const auth_2 = require("./middleware/auth");
 const health_1 = require("./routes/health");
 const auth_3 = require("./routes/auth");
@@ -28,6 +30,7 @@ const audit_2 = require("./routes/audit");
 const supervisor_2 = require("./routes/supervisor");
 const locks_1 = require("./routes/locks");
 const git_1 = require("./routes/git");
+const terminals_1 = require("./routes/terminals");
 const app = (0, express_1.default)();
 exports.app = app;
 // Security middleware
@@ -71,6 +74,7 @@ app.use('/audit', auth_2.authMiddleware, audit_2.auditRouter);
 app.use('/supervisor', auth_2.authMiddleware, supervisor_2.supervisorRouter);
 app.use('/locks', auth_2.authMiddleware, locks_1.locksRouter);
 app.use('/git', auth_2.authMiddleware, git_1.gitRouter);
+app.use('/terminals', auth_2.authMiddleware, terminals_1.terminalsRouter);
 // Error handler
 app.use((err, req, res, next) => {
     console.error('Error:', err);
@@ -81,7 +85,7 @@ app.use((err, req, res, next) => {
 });
 // Initialize and start
 async function main() {
-    console.log('🔧 AgentX Daemon - Phase 2');
+    console.log('🔧 AgentX Daemon - Phase 3');
     // Initialize config first (includes port discovery)
     await (0, config_1.initializeConfig)();
     console.log(`Sandbox root: ${config_1.config.sandboxRoot}`);
@@ -93,6 +97,8 @@ async function main() {
     // Initialize SQLite database (Phase 2)
     (0, database_1.initDatabase)();
     console.log('💾 SQLite persistence initialized');
+    // Initialize terminal manager (Phase 3)
+    terminal_1.terminalManager.initialize();
     // Write runtime config for UI discovery
     // Schema versioned for backward compatibility
     const runtimeConfig = {
@@ -108,16 +114,13 @@ async function main() {
     fs_1.default.writeFileSync(path_1.default.join(runtimeDir, 'runtime.json'), JSON.stringify(runtimeConfig, null, 2));
     // Start server
     const server = http_1.default.createServer(app);
-    // Explicitly reject websocket upgrades until WS auth is implemented
-    server.on('upgrade', (req, socket) => {
-        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-        socket.destroy();
-    });
+    // Initialize WebSocket server (Phase 3)
+    websocket_1.wsServer.initialize(server);
     server.listen(config_1.config.port, '127.0.0.1', () => {
         console.log(`✅ Daemon running on http://127.0.0.1:${config_1.config.port}`);
         console.log(`📁 Sandbox: ${config_1.config.sandboxRoot}`);
         console.log(`🔒 Auth: ${auth_1.auth.isEnabled() ? 'enabled' : 'disabled'}`);
-        console.log('🔌 WebSocket upgrades: disabled until auth handshake is implemented');
+        console.log('🖥️  WebSocket terminals: enabled on /ws');
     });
 }
 main().catch((err) => {
@@ -127,6 +130,8 @@ main().catch((err) => {
 // Graceful shutdown handlers
 process.on('SIGINT', async () => {
     console.log('\n🛑 Received SIGINT, shutting down...');
+    websocket_1.wsServer.shutdown();
+    terminal_1.terminalManager.shutdown();
     await supervisor_1.supervisor.shutdown();
     audit_1.audit.shutdown();
     (0, database_1.closeDatabase)();
@@ -134,6 +139,8 @@ process.on('SIGINT', async () => {
 });
 process.on('SIGTERM', async () => {
     console.log('\n🛑 Received SIGTERM, shutting down...');
+    websocket_1.wsServer.shutdown();
+    terminal_1.terminalManager.shutdown();
     await supervisor_1.supervisor.shutdown();
     audit_1.audit.shutdown();
     (0, database_1.closeDatabase)();

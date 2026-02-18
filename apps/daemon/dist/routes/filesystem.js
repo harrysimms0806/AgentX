@@ -11,71 +11,134 @@ const path_1 = __importDefault(require("path"));
 const sandbox_1 = require("../sandbox");
 const audit_1 = require("../audit");
 const projects_1 = require("../store/projects");
+const database_1 = require("../database");
 const router = (0, express_1.Router)();
 exports.fsRouter = router;
+const TREE_IGNORES = new Set([
+    '.git',
+    'node_modules',
+    'dist',
+    'build',
+    '.next',
+    'out',
+    'coverage',
+    'target',
+    '.cache',
+    '.turbo',
+    '.idea',
+    '.vscode',
+]);
+const MAX_TREE_NODES = 5000;
+const MAX_FILE_READ_BYTES = 2 * 1024 * 1024; // 2MB
+const READ_AUDIT_SAMPLE_RATE = Number(process.env.FILE_READ_AUDIT_SAMPLE_RATE ?? '0.1');
+function actorIdFromReq(req) {
+    return req.session?.clientId || req.headers['x-client-id'] || 'unknown';
+}
 // Helper to check write capabilities
-function canWrite(req, projectId) {
+function canWrite(projectId) {
     const project = projects_1.projects.get(projectId);
     if (!project) {
-        return { allowed: false, error: 'Project not found' };
+        return { allowed: false, error: 'Project not found', code: 'PROJECT_NOT_FOUND' };
     }
-    // Check safeMode - if enabled, no writes allowed
     if (project.settings.safeMode) {
-        return {
-            allowed: false,
-            error: 'Write denied: project is in safe mode. Disable safeMode to enable writes.'
-        };
+        return { allowed: false, error: 'Write blocked: safe mode', code: 'SAFE_MODE_BLOCK' };
     }
-    // Check FS_WRITE capability
     if (!project.settings.capabilities.FS_WRITE) {
-        return {
-            allowed: false,
-            error: 'Write denied: FS_WRITE capability not enabled for this project.'
-        };
+        return { allowed: false, error: 'Write blocked: capability disabled', code: 'FS_WRITE_DISABLED' };
     }
     return { allowed: true };
 }
-// GET /fs/tree?projectId= - Get file tree
+function canonicalLockPath(projectId, filePath) {
+    const check = sandbox_1.sandbox.validatePath(projectId, filePath);
+    if (!check.allowed || !check.realPath) {
+        return null;
+    }
+    const projectPath = sandbox_1.sandbox.getProjectPath(projectId);
+    if (!projectPath.allowed) {
+        return null;
+    }
+    const relative = path_1.default.relative(projectPath.path, check.realPath).replace(/\\/g, '/');
+    if (relative.startsWith('..') || path_1.default.isAbsolute(relative)) {
+        return null;
+    }
+    return relative || '.';
+}
+function requireLock(projectId, filePath, actorId) {
+    database_1.lockDb.cleanupExpired(Number(process.env.LOCK_TTL_MS ?? `${10 * 60 * 1000}`));
+    const normalizedPath = canonicalLockPath(projectId, filePath);
+    if (!normalizedPath) {
+        return { allowed: false, error: 'Path outside sandbox', code: 'PATH_OUTSIDE_SANDBOX' };
+    }
+    const lock = database_1.lockDb.get(projectId, normalizedPath);
+    if (!lock) {
+        return { allowed: false, error: 'Write blocked: no lock', code: 'LOCK_REQUIRED' };
+    }
+    if (lock.lockedBy !== actorId) {
+        return { allowed: false, error: 'Write blocked: lock owned by another actor', code: 'LOCK_OWNED_BY_OTHER' };
+    }
+    return { allowed: true, normalizedPath };
+}
+function shouldIgnoreEntry(entryName) {
+    if (TREE_IGNORES.has(entryName))
+        return true;
+    if (entryName.startsWith('.'))
+        return true;
+    return false;
+}
+function sortTreeNodes(nodes) {
+    return nodes.sort((a, b) => {
+        if (a.type !== b.type) {
+            return a.type === 'directory' ? -1 : 1;
+        }
+        return a.name.localeCompare(b.name);
+    });
+}
+// GET /fs/tree?projectId=&path=
 router.get('/tree', (req, res) => {
-    const { projectId } = req.query;
+    const { projectId, path: relativePath } = req.query;
     if (!projectId || typeof projectId !== 'string') {
         res.status(400).json({ error: 'projectId required' });
         return;
     }
-    const check = sandbox_1.sandbox.validatePath(projectId, '.');
+    const requestedPath = typeof relativePath === 'string' ? relativePath : '.';
+    const check = sandbox_1.sandbox.validatePath(projectId, requestedPath);
     if (!check.allowed) {
         res.status(403).json({ error: check.error });
         return;
     }
-    function buildTree(dirPath, relativePath = '') {
-        const entries = fs_1.default.readdirSync(dirPath, { withFileTypes: true });
+    try {
+        const targetStats = fs_1.default.statSync(check.realPath);
+        if (!targetStats.isDirectory()) {
+            res.status(400).json({ error: 'Path is not a directory' });
+            return;
+        }
+        const entries = fs_1.default.readdirSync(check.realPath, { withFileTypes: true });
         const nodes = [];
         for (const entry of entries) {
-            // Skip hidden files and special directories
-            if (entry.name.startsWith('.') && entry.name !== '.git')
+            if (shouldIgnoreEntry(entry.name))
                 continue;
-            if (entry.name === 'node_modules')
+            const entryPath = path_1.default.posix.join(requestedPath === '.' ? '' : requestedPath, entry.name);
+            const fullPath = path_1.default.join(check.realPath, entry.name);
+            const stats = fs_1.default.lstatSync(fullPath);
+            if (stats.isSymbolicLink()) {
                 continue;
-            const entryPath = path_1.default.join(relativePath, entry.name);
-            const fullPath = path_1.default.join(dirPath, entry.name);
-            const stats = fs_1.default.statSync(fullPath);
-            const node = {
+            }
+            nodes.push({
                 name: entry.name,
                 path: entryPath,
-                type: entry.isDirectory() ? 'directory' : 'file',
-                size: entry.isFile() ? stats.size : undefined,
+                type: stats.isDirectory() ? 'directory' : 'file',
+                size: stats.isFile() ? stats.size : undefined,
                 modifiedAt: stats.mtime.toISOString(),
-            };
-            if (entry.isDirectory()) {
-                node.children = buildTree(fullPath, entryPath);
+            });
+            if (nodes.length >= MAX_TREE_NODES) {
+                break;
             }
-            nodes.push(node);
         }
-        return nodes;
-    }
-    try {
-        const tree = buildTree(check.realPath);
-        res.json(tree);
+        res.json({
+            path: requestedPath,
+            truncated: nodes.length >= MAX_TREE_NODES,
+            nodes: sortTreeNodes(nodes),
+        });
     }
     catch (err) {
         res.status(500).json({ error: `Failed to read directory: ${err}` });
@@ -98,9 +161,25 @@ router.get('/read', (req, res) => {
             res.status(404).json({ error: 'File not found' });
             return;
         }
+        const stats = fs_1.default.statSync(check.realPath);
+        if (!stats.isFile()) {
+            res.status(400).json({ error: 'Path is not a file' });
+            return;
+        }
+        if (stats.size > MAX_FILE_READ_BYTES) {
+            res.status(413).json({
+                error: 'File too large to open safely',
+                code: 'FILE_TOO_LARGE',
+                size: stats.size,
+                maxSize: MAX_FILE_READ_BYTES,
+            });
+            return;
+        }
         const content = fs_1.default.readFileSync(check.realPath, 'utf8');
-        audit_1.audit.logLegacy(projectId, 'user', 'FILE_READ', { path: filePath }, req.session?.clientId);
-        res.json({ content });
+        if (Math.random() < READ_AUDIT_SAMPLE_RATE) {
+            audit_1.audit.logLegacy(projectId, 'user', 'FILE_READ', { path: filePath, size: stats.size }, actorIdFromReq(req));
+        }
+        res.json({ content, size: stats.size });
     }
     catch (err) {
         res.status(500).json({ error: `Failed to read file: ${err}` });
@@ -113,10 +192,15 @@ router.put('/write', (req, res) => {
         res.status(400).json({ error: 'projectId, path, and content required' });
         return;
     }
-    // Check write capability
-    const writeCheck = canWrite(req, projectId);
+    const writeCheck = canWrite(projectId);
     if (!writeCheck.allowed) {
-        res.status(403).json({ error: writeCheck.error || 'Write not allowed' });
+        res.status(403).json({ error: writeCheck.error || 'Write not allowed', code: writeCheck.code });
+        return;
+    }
+    const actorId = actorIdFromReq(req);
+    const lockCheck = requireLock(projectId, filePath, actorId);
+    if (!lockCheck.allowed) {
+        res.status(403).json({ error: lockCheck.error, code: lockCheck.code });
         return;
     }
     const check = sandbox_1.sandbox.validatePath(projectId, filePath);
@@ -125,13 +209,12 @@ router.put('/write', (req, res) => {
         return;
     }
     try {
-        // Ensure parent directory exists
         const parentDir = path_1.default.dirname(check.realPath);
         if (!fs_1.default.existsSync(parentDir)) {
             fs_1.default.mkdirSync(parentDir, { recursive: true });
         }
         fs_1.default.writeFileSync(check.realPath, content, 'utf8');
-        audit_1.audit.logLegacy(projectId, 'user', 'FILE_WRITE', { path: filePath, size: content.length }, req.session?.clientId);
+        audit_1.audit.logLegacy(projectId, 'user', 'FILE_WRITE', { path: filePath, size: content.length }, actorId);
         res.json({ success: true, path: filePath });
     }
     catch (err) {
@@ -145,9 +228,15 @@ router.post('/delete', (req, res) => {
         res.status(400).json({ error: 'projectId and path required' });
         return;
     }
-    const writeCheck = canWrite(req, projectId);
+    const writeCheck = canWrite(projectId);
     if (!writeCheck.allowed) {
-        res.status(403).json({ error: writeCheck.error || 'Delete not allowed' });
+        res.status(403).json({ error: writeCheck.error || 'Delete not allowed', code: writeCheck.code });
+        return;
+    }
+    const actorId = actorIdFromReq(req);
+    const lockCheck = requireLock(projectId, filePath, actorId);
+    if (!lockCheck.allowed) {
+        res.status(403).json({ error: lockCheck.error, code: lockCheck.code });
         return;
     }
     const result = sandbox_1.sandbox.softDelete(projectId, filePath);
@@ -155,7 +244,7 @@ router.post('/delete', (req, res) => {
         res.status(403).json({ error: result.error });
         return;
     }
-    audit_1.audit.logLegacy(projectId, 'user', 'FILE_DELETE', { path: filePath, trashPath: result.realPath }, req.session?.clientId);
+    audit_1.audit.logLegacy(projectId, 'user', 'FILE_DELETE', { path: filePath, trashPath: result.realPath }, actorId);
     res.json({ success: true, trashPath: result.realPath });
 });
 // POST /fs/rename - Rename file
@@ -165,9 +254,15 @@ router.post('/rename', (req, res) => {
         res.status(400).json({ error: 'projectId, oldPath, and newPath required' });
         return;
     }
-    const writeCheck = canWrite(req, projectId);
+    const writeCheck = canWrite(projectId);
     if (!writeCheck.allowed) {
-        res.status(403).json({ error: writeCheck.error || 'Rename not allowed' });
+        res.status(403).json({ error: writeCheck.error || 'Rename not allowed', code: writeCheck.code });
+        return;
+    }
+    const actorId = actorIdFromReq(req);
+    const sourceLockCheck = requireLock(projectId, oldPath, actorId);
+    if (!sourceLockCheck.allowed) {
+        res.status(403).json({ error: sourceLockCheck.error, code: sourceLockCheck.code });
         return;
     }
     const oldCheck = sandbox_1.sandbox.validatePath(projectId, oldPath);
@@ -182,7 +277,16 @@ router.post('/rename', (req, res) => {
     }
     try {
         fs_1.default.renameSync(oldCheck.realPath, newCheck.realPath);
-        audit_1.audit.logLegacy(projectId, 'user', 'FILE_RENAME', { oldPath, newPath }, req.session?.clientId);
+        // Move lock ownership to new path after rename
+        database_1.lockDb.release(projectId, sourceLockCheck.normalizedPath, actorId);
+        const normalizedNewPath = canonicalLockPath(projectId, newPath) || newPath;
+        database_1.lockDb.acquire({
+            projectId,
+            filePath: normalizedNewPath,
+            lockedBy: actorId,
+            lockedAt: new Date().toISOString(),
+        });
+        audit_1.audit.logLegacy(projectId, 'user', 'FILE_RENAME', { oldPath, newPath }, actorId);
         res.json({ success: true });
     }
     catch (err) {
