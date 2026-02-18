@@ -1,5 +1,7 @@
 import fs from 'fs';
 import { ChildProcess } from 'child_process';
+import { type IPty } from 'node-pty';
+import { EventEmitter } from 'events';
 import { Run } from '@agentx/api-types';
 interface RunRecord extends Run {
     process?: ChildProcess;
@@ -8,7 +10,22 @@ interface RunRecord extends Run {
     logStream?: fs.WriteStream;
     timeoutMs?: number;
 }
-declare class Supervisor {
+interface TerminalRecord {
+    id: string;
+    projectId: string;
+    cwd: string;
+    title: string;
+    status: 'active' | 'closed' | 'stale';
+    createdAt: string;
+    lastActiveAt: string;
+    pid?: number;
+    pty?: IPty;
+    outputBuffer: string[];
+    bufferedBytes: number;
+    logsPath: string;
+    logStream?: fs.WriteStream;
+}
+declare class Supervisor extends EventEmitter {
     private runs;
     private logsDir;
     private runtimeDir;
@@ -19,6 +36,10 @@ declare class Supervisor {
     private initialized;
     private runsFile;
     private rotationInterval;
+    private terminals;
+    private terminalsFile;
+    private maxTerminalBufferBytes;
+    constructor();
     private toPublicRun;
     initialize(): Promise<void>;
     /**
@@ -82,6 +103,22 @@ declare class Supervisor {
      * Cleanup old runs (public method for route encapsulation)
      */
     cleanupRuns(projectId?: string, maxAgeMs?: number): number;
+    private persistTerminals;
+    private loadPersistedTerminals;
+    private appendTerminalOutput;
+    createTerminal(projectId: string, cwd: string, shell?: string): TerminalRecord;
+    listTerminals(projectId?: string): TerminalRecord[];
+    getTerminal(id: string): TerminalRecord | undefined;
+    writeTerminal(id: string, data: string): boolean;
+    resizeTerminal(id: string, cols: number, rows: number): boolean;
+    killTerminal(id: string, reason?: string): Promise<boolean>;
+    clearTerminal(id: string): boolean;
+    getTerminalOutput(id: string): string[];
+    /**
+     * Spawn an agent run (Phase 4)
+     * Creates a supervised process for an AI agent
+     */
+    spawnAgentRun(projectId: string, agentInstanceId: string, agentDefinition: any, prompt: string, contextPackId: string): Promise<string>;
     /**
      * Shutdown cleanup
      */

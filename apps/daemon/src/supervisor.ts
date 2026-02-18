@@ -728,6 +728,59 @@ class Supervisor extends EventEmitter {
     return [...terminal.outputBuffer];
   }
 
+  /**
+   * Spawn an agent run (Phase 4)
+   * Creates a supervised process for an AI agent
+   */
+  async spawnAgentRun(
+    projectId: string,
+    agentInstanceId: string,
+    agentDefinition: any,
+    prompt: string,
+    contextPackId: string
+  ): Promise<string> {
+    const id = `agent-run-${randomUUID()}`;
+    const now = new Date().toISOString();
+
+    // Create log file
+    const logFile = path.join(this.logsDir, `${id}.log`);
+    const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+
+    const run: RunRecord = {
+      id,
+      projectId,
+      type: 'agent',
+      ownerAgentId: agentInstanceId,
+      status: 'running',
+      pid: undefined,
+      startedAt: now,
+      logsPath: logFile,
+      outputBuffer: [],
+      bufferedBytes: 0,
+      logStream,
+    };
+
+    this.runs.set(id, run);
+
+    // Log agent start
+    logStream.write(`=== Agent Run: ${id} ===\n`);
+    logStream.write(`Agent: ${agentDefinition.name} (${agentDefinition.id})\n`);
+    logStream.write(`Prompt: ${prompt}\n`);
+    logStream.write(`Context: ${contextPackId}\n`);
+    logStream.write(`Started: ${now}\n`);
+    logStream.write(`===\n\n`);
+
+    // For Phase 4, we're creating the run record
+    // The actual agent execution will be implemented in Phase 5
+    // For now, simulate a placeholder process
+    run.status = 'pending';
+    run.summary = `Agent ${agentDefinition.name} queued for execution`;
+
+    this.persistRuns();
+
+    console.log(`Agent run ${id} created for instance ${agentInstanceId}`);
+    return id;
+  }
 
   /**
    * Shutdown cleanup

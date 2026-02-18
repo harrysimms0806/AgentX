@@ -1,6 +1,6 @@
 "use strict";
-// AgentX Daemon - Phase 3 Implementation
-// Core daemon + SQLite persistence + WebSocket terminals
+// AgentX Daemon - Phase 4 Implementation
+// Core daemon + SQLite + WebSocket terminals + Agent orchestration
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -21,6 +21,7 @@ const supervisor_1 = require("./supervisor");
 const database_1 = require("./database");
 const terminal_1 = require("./terminal");
 const websocket_1 = require("./websocket");
+const agents_1 = require("./agents");
 const auth_2 = require("./middleware/auth");
 const health_1 = require("./routes/health");
 const auth_3 = require("./routes/auth");
@@ -31,6 +32,7 @@ const supervisor_2 = require("./routes/supervisor");
 const locks_1 = require("./routes/locks");
 const git_1 = require("./routes/git");
 const terminals_1 = require("./routes/terminals");
+const agents_2 = require("./routes/agents");
 const app = (0, express_1.default)();
 exports.app = app;
 // Security middleware
@@ -75,6 +77,7 @@ app.use('/supervisor', auth_2.authMiddleware, supervisor_2.supervisorRouter);
 app.use('/locks', auth_2.authMiddleware, locks_1.locksRouter);
 app.use('/git', auth_2.authMiddleware, git_1.gitRouter);
 app.use('/terminals', auth_2.authMiddleware, terminals_1.terminalsRouter);
+app.use('/agents', auth_2.authMiddleware, agents_2.agentsRouter);
 // Error handler
 app.use((err, req, res, next) => {
     console.error('Error:', err);
@@ -85,7 +88,7 @@ app.use((err, req, res, next) => {
 });
 // Initialize and start
 async function main() {
-    console.log('🔧 AgentX Daemon - Phase 3');
+    console.log('🔧 AgentX Daemon - Phase 4');
     // Initialize config first (includes port discovery)
     await (0, config_1.initializeConfig)();
     console.log(`Sandbox root: ${config_1.config.sandboxRoot}`);
@@ -99,6 +102,8 @@ async function main() {
     console.log('💾 SQLite persistence initialized');
     // Initialize terminal manager (Phase 3)
     terminal_1.terminalManager.initialize();
+    // Initialize agent manager (Phase 4)
+    agents_1.agentManager.initialize();
     // Write runtime config for UI discovery
     // Schema versioned for backward compatibility
     const runtimeConfig = {
@@ -121,6 +126,7 @@ async function main() {
         console.log(`📁 Sandbox: ${config_1.config.sandboxRoot}`);
         console.log(`🔒 Auth: ${auth_1.auth.isEnabled() ? 'enabled' : 'disabled'}`);
         console.log('🖥️  WebSocket terminals: enabled on /ws');
+        console.log('🤖 Agent orchestration: enabled');
     });
 }
 main().catch((err) => {
@@ -130,6 +136,7 @@ main().catch((err) => {
 // Graceful shutdown handlers
 process.on('SIGINT', async () => {
     console.log('\n🛑 Received SIGINT, shutting down...');
+    agents_1.agentManager.shutdown();
     websocket_1.wsServer.shutdown();
     terminal_1.terminalManager.shutdown();
     await supervisor_1.supervisor.shutdown();
@@ -139,6 +146,7 @@ process.on('SIGINT', async () => {
 });
 process.on('SIGTERM', async () => {
     console.log('\n🛑 Received SIGTERM, shutting down...');
+    agents_1.agentManager.shutdown();
     websocket_1.wsServer.shutdown();
     terminal_1.terminalManager.shutdown();
     await supervisor_1.supervisor.shutdown();
