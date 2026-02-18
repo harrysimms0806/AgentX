@@ -83,7 +83,7 @@ class WebSocketServerManager {
 
     ws.on('message', (data) => {
       try {
-        const message = JSON.parse(data.toString());
+        const message = JSON.parse(String(data));
         this.handleMessage(client, message);
       } catch (err) {
         this.send(client, {
@@ -193,7 +193,16 @@ class WebSocketServerManager {
   }
 
   private async handleTerminalAttach(client: WSClient, message: any): Promise<void> {
-    const { terminalId } = message;
+    const { terminalId, projectId } = message;
+
+    if (!projectId) {
+      this.send(client, {
+        type: 'terminal:error',
+        code: 'PROJECT_ID_REQUIRED',
+        error: 'projectId required',
+      });
+      return;
+    }
 
     const terminal = terminalManager.get(terminalId);
     if (!terminal) {
@@ -201,6 +210,15 @@ class WebSocketServerManager {
         type: 'terminal:error',
         code: 'TERMINAL_NOT_FOUND',
         error: 'Terminal not found',
+      });
+      return;
+    }
+
+    if (terminal.projectId !== projectId) {
+      this.send(client, {
+        type: 'terminal:error',
+        code: 'TERMINAL_PROJECT_MISMATCH',
+        error: 'Terminal does not belong to provided projectId',
       });
       return;
     }
@@ -238,13 +256,23 @@ class WebSocketServerManager {
   }
 
   private handleTerminalResize(client: WSClient, message: any): void {
-    const { terminalId, cols, rows } = message;
+    const { terminalId, cols, rows, projectId } = message;
 
     if (!terminalId || !cols || !rows) {
       this.send(client, {
         type: 'terminal:error',
         code: 'RESIZE_DIMENSIONS_REQUIRED',
         error: 'terminalId, cols, and rows required',
+      });
+      return;
+    }
+
+    const terminal = terminalManager.get(terminalId);
+    if (!terminal || terminal.projectId !== projectId) {
+      this.send(client, {
+        type: 'terminal:error',
+        code: 'TERMINAL_PROJECT_MISMATCH',
+        error: 'Terminal does not belong to provided projectId',
       });
       return;
     }
@@ -260,7 +288,7 @@ class WebSocketServerManager {
   }
 
   private handleTerminalData(client: WSClient, message: any): void {
-    const { terminalId, data } = message;
+    const { terminalId, data, projectId } = message;
 
     const targetId = terminalId || client.terminalId;
     if (!targetId) {
@@ -268,6 +296,16 @@ class WebSocketServerManager {
         type: 'terminal:error',
         code: 'TERMINAL_NOT_ATTACHED',
         error: 'No terminal attached or specified',
+      });
+      return;
+    }
+
+    const terminal = terminalManager.get(targetId);
+    if (!terminal || terminal.projectId !== projectId) {
+      this.send(client, {
+        type: 'terminal:error',
+        code: 'TERMINAL_PROJECT_MISMATCH',
+        error: 'Terminal does not belong to provided projectId',
       });
       return;
     }
@@ -283,9 +321,18 @@ class WebSocketServerManager {
   }
 
   private async handleTerminalKill(client: WSClient, message: any): Promise<void> {
-    const { terminalId } = message;
+    const { terminalId, projectId } = message;
 
     const terminal = terminalManager.get(terminalId);
+    if (terminal && terminal.projectId !== projectId) {
+      this.send(client, {
+        type: 'terminal:error',
+        code: 'TERMINAL_PROJECT_MISMATCH',
+        error: 'Terminal does not belong to provided projectId',
+      });
+      return;
+    }
+
     if (terminal) {
       await audit.log({
         id: randomUUID(),
@@ -313,7 +360,17 @@ class WebSocketServerManager {
   }
 
   private handleTerminalClear(client: WSClient, message: any): void {
-    const { terminalId } = message;
+    const { terminalId, projectId } = message;
+    const terminal = terminalManager.get(terminalId);
+    if (terminal && terminal.projectId !== projectId) {
+      this.send(client, {
+        type: 'terminal:error',
+        code: 'TERMINAL_PROJECT_MISMATCH',
+        error: 'Terminal does not belong to provided projectId',
+      });
+      return;
+    }
+
     const success = terminalManager.clear(terminalId);
     this.send(client, {
       type: 'terminal:cleared',
@@ -325,9 +382,16 @@ class WebSocketServerManager {
   private handleTerminalList(client: WSClient, message: any): void {
     const { projectId } = message;
 
-    const terminals = projectId
-      ? terminalManager.getByProject(projectId)
-      : terminalManager.getAll();
+    if (!projectId) {
+      this.send(client, {
+        type: 'terminal:error',
+        code: 'PROJECT_ID_REQUIRED',
+        error: 'projectId required',
+      });
+      return;
+    }
+
+    const terminals = terminalManager.getByProject(projectId);
 
     this.send(client, {
       type: 'terminal:list',

@@ -4,18 +4,22 @@ import { useDaemon } from '@/contexts/DaemonContext';
 
 function stateLabel(state: string) {
   switch (state) {
-    case 'connected':
-      return 'Daemon connected';
-    case 'starting':
-      return 'Daemon starting';
-    case 'retrying':
-      return 'Daemon retrying';
-    case 'runtime-missing':
-      return 'Runtime file missing';
-    case 'auth-failed':
-      return 'Not authorised';
+    case 'online':
+      return 'Daemon online';
+    case 'discovering':
+      return 'Discovering daemon';
+    case 'connecting':
+      return 'Connecting';
+    case 'runtime_missing':
+      return 'Runtime missing';
+    case 'auth_failed':
+      return 'Auth failed';
+    case 'offline':
+      return 'Daemon offline';
+    case 'error':
+      return 'Connection error';
     default:
-      return 'Daemon disconnected';
+      return 'Daemon status unknown';
   }
 }
 

@@ -22,13 +22,26 @@ function mapTerminalError(err: any): { error: string; code: string; status: numb
   return { code, error, status: statusForCode(code) };
 }
 
-// GET /terminals - List all terminals
-router.get('/', (req, res) => {
-  const { projectId } = req.query;
+function requireScopedProjectId(projectId: unknown, res: any): string | null {
+  if (!projectId || typeof projectId !== 'string') {
+    res.status(400).json({ error: 'projectId is required', code: 'PROJECT_ID_REQUIRED' });
+    return null;
+  }
 
-  const terminals = projectId
-    ? terminalManager.getByProject(projectId as string)
-    : terminalManager.getAll();
+  if (!/^[a-z0-9-]+$/.test(projectId)) {
+    res.status(400).json({ error: 'Invalid projectId format', code: 'PROJECT_ID_INVALID' });
+    return null;
+  }
+
+  return projectId;
+}
+
+// GET /terminals - List terminals for a single project
+router.get('/', (req, res) => {
+  const projectId = requireScopedProjectId(req.query.projectId, res);
+  if (!projectId) return;
+
+  const terminals = terminalManager.getByProject(projectId);
 
   res.json({ terminals });
 });
@@ -88,10 +101,17 @@ router.post('/', async (req, res) => {
 // GET /terminals/:id - Get terminal details
 router.get('/:id', (req, res) => {
   const { id } = req.params;
+  const projectId = requireScopedProjectId(req.query.projectId, res);
+  if (!projectId) return;
 
   const terminal = terminalManager.get(id);
   if (!terminal) {
     res.status(404).json({ error: 'Terminal not found', code: 'TERMINAL_NOT_FOUND' });
+    return;
+  }
+
+  if (terminal.projectId !== projectId) {
+    res.status(403).json({ error: 'Terminal does not belong to provided projectId', code: 'TERMINAL_PROJECT_MISMATCH' });
     return;
   }
 
@@ -112,10 +132,23 @@ router.get('/:id', (req, res) => {
 // POST /terminals/:id/resize - Resize terminal
 router.post('/:id/resize', (req, res) => {
   const { id } = req.params;
-  const { cols, rows } = req.body;
+  const { cols, rows, projectId: requestProjectId } = req.body;
+  const projectId = requireScopedProjectId(requestProjectId, res);
+  if (!projectId) return;
 
   if (!cols || !rows) {
     res.status(400).json({ error: 'cols and rows are required', code: 'RESIZE_DIMENSIONS_REQUIRED' });
+    return;
+  }
+
+  const terminal = terminalManager.get(id);
+  if (!terminal) {
+    res.status(404).json({ error: 'Terminal not found', code: 'TERMINAL_NOT_FOUND' });
+    return;
+  }
+
+  if (terminal.projectId !== projectId) {
+    res.status(403).json({ error: 'Terminal does not belong to provided projectId', code: 'TERMINAL_PROJECT_MISMATCH' });
     return;
   }
 
@@ -131,9 +164,16 @@ router.post('/:id/resize', (req, res) => {
 // POST /terminals/:id/kill - Kill terminal
 router.post('/:id/kill', async (req, res) => {
   const { id } = req.params;
+  const projectId = requireScopedProjectId(req.body.projectId, res);
+  if (!projectId) return;
   const clientId = (req as any).session?.clientId || 'unknown';
 
   const terminal = terminalManager.get(id);
+  if (terminal && terminal.projectId !== projectId) {
+    res.status(403).json({ error: 'Terminal does not belong to provided projectId', code: 'TERMINAL_PROJECT_MISMATCH' });
+    return;
+  }
+
   if (terminal) {
     await audit.log({
       id: randomUUID(),
@@ -158,6 +198,13 @@ router.post('/:id/kill', async (req, res) => {
 // DELETE /terminals/:id - Alias for kill
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
+  const projectId = requireScopedProjectId(req.body.projectId, res);
+  if (!projectId) return;
+  const terminal = terminalManager.get(id);
+  if (terminal && terminal.projectId !== projectId) {
+    res.status(403).json({ error: 'Terminal does not belong to provided projectId', code: 'TERMINAL_PROJECT_MISMATCH' });
+    return;
+  }
   const success = terminalManager.kill(id);
 
   if (success) {
@@ -170,6 +217,13 @@ router.delete('/:id', async (req, res) => {
 // DELETE /terminals/:id/clear - clear stale/closed terminal metadata
 router.delete('/:id/clear', (req, res) => {
   const { id } = req.params;
+  const projectId = requireScopedProjectId(req.body.projectId, res);
+  if (!projectId) return;
+  const terminal = terminalManager.get(id);
+  if (terminal && terminal.projectId !== projectId) {
+    res.status(403).json({ error: 'Terminal does not belong to provided projectId', code: 'TERMINAL_PROJECT_MISMATCH' });
+    return;
+  }
   const success = terminalManager.clear(id);
   if (success) {
     res.json({ success: true, message: 'Terminal metadata cleared' });

@@ -5,12 +5,13 @@ import { clearTerminal, createSessionToken, getDiscovery, getHealth, getTerminal
 import { RETRY_CONFIG } from '@/lib/daemon/config';
 
 export type DaemonConnectionState =
-  | 'starting'
-  | 'retrying'
-  | 'connected'
-  | 'disconnected'
-  | 'runtime-missing'
-  | 'auth-failed';
+  | 'discovering'
+  | 'runtime_missing'
+  | 'connecting'
+  | 'online'
+  | 'auth_failed'
+  | 'offline'
+  | 'error';
 
 interface DaemonContextType {
   connectionState: DaemonConnectionState;
@@ -36,7 +37,7 @@ interface DaemonContextType {
 }
 
 const DaemonContext = createContext<DaemonContextType>({
-  connectionState: 'starting',
+  connectionState: 'discovering',
   connected: false,
   health: null,
   daemonPort: null,
@@ -51,7 +52,7 @@ const DaemonContext = createContext<DaemonContextType>({
   killTerminalSession: async () => {},
   clearStaleTerminals: async () => {},
   token: null,
-  statusMessage: 'Waiting for daemon discovery…',
+  statusMessage: 'Discovering daemon runtime…',
   retryAttempt: 0,
   lastHealthAt: null,
   lastAuthAt: null,
@@ -63,17 +64,18 @@ function getDelayMs(attempt: number) {
 }
 
 export function DaemonProvider({ children }: { children: React.ReactNode }) {
-  const [connectionState, setConnectionState] = useState<DaemonConnectionState>('starting');
+  const [connectionState, setConnectionState] = useState<DaemonConnectionState>('discovering');
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [daemonUrl, setDaemonUrl] = useState<string | null>(null);
   const [daemonPort, setDaemonPort] = useState<number | null>(null);
   const [discoverySource, setDiscoverySource] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(null);
-  const [statusMessage, setStatusMessage] = useState('Waiting for daemon discovery…');
+  const [statusMessage, setStatusMessage] = useState('Discovering daemon runtime…');
   const [terminals, setTerminals] = useState<Array<{ id: string; title: string; status: 'active' | 'closed' | 'stale'; projectId: string }>>([]);
   const [retryAttempt, setRetryAttempt] = useState(0);
   const [lastHealthAt, setLastHealthAt] = useState<string | null>(null);
   const [lastAuthAt, setLastAuthAt] = useState<string | null>(null);
+  const terminalProjectScope = 'default';
 
   useEffect(() => {
     let active = true;
@@ -92,7 +94,7 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
       }
 
       setRetryAttempt(attempt);
-      setConnectionState(attempt > 1 ? 'retrying' : 'starting');
+      setConnectionState('discovering');
 
       const discovery = await getDiscovery();
       if (!discovery.ok) {
@@ -101,10 +103,10 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
         }
 
         if (discovery.error.code === 'RUNTIME_MISSING') {
-          setConnectionState('runtime-missing');
+          setConnectionState('runtime_missing');
           setStatusMessage('Runtime file missing. Start daemon to generate ~/.agentx/runtime.json.');
         } else {
-          setConnectionState('disconnected');
+          setConnectionState('error');
           setStatusMessage('Runtime discovery failed. Verify ~/.agentx/runtime.json content.');
         }
         setHealth(null);
@@ -123,7 +125,7 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        setConnectionState('disconnected');
+        setConnectionState('offline');
         setHealth(null);
         setLastHealthAt(null);
         setStatusMessage('Daemon not running yet. Retrying connection…');
@@ -131,6 +133,7 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      setConnectionState('connecting');
       const session = await createSessionToken();
       if (!session.ok) {
         if (!active) {
@@ -138,10 +141,10 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
         }
 
         if (session.status === 401 || session.status === 403) {
-          setConnectionState('auth-failed');
+          setConnectionState('auth_failed');
           setStatusMessage('Not authorised / session expired.');
         } else {
-          setConnectionState('disconnected');
+          setConnectionState('error');
           setStatusMessage('Unable to create daemon session. Retrying…');
         }
         setToken(null);
@@ -158,10 +161,10 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
       setHealth(healthResult.data);
       setLastHealthAt(nowIso);
       setLastAuthAt(nowIso);
-      setConnectionState('connected');
+      setConnectionState('online');
       setStatusMessage(`Connected to daemon on port ${healthResult.data.daemonPort}.`);
 
-      const terminalResult = await getTerminals(session.token);
+      const terminalResult = await getTerminals(session.token, terminalProjectScope);
       if (terminalResult.ok) {
         setTerminals(terminalResult.data.terminals.map((t) => ({
           id: t.id,
@@ -188,8 +191,10 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
 
   const killTerminalSession = async (id: string) => {
     if (!token) return;
-    await killTerminal(id, token);
-    const refreshed = await getTerminals(token);
+    const terminal = terminals.find((item) => item.id === id);
+    if (!terminal) return;
+    await killTerminal(id, terminal.projectId, token);
+    const refreshed = await getTerminals(token, terminal.projectId);
     if (refreshed.ok) {
       setTerminals(refreshed.data.terminals.map((t) => ({ id: t.id, title: t.title, status: t.status, projectId: t.projectId })));
     }
@@ -199,9 +204,10 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
     if (!token) return;
     const stale = terminals.filter((terminal) => terminal.status === 'stale' || terminal.status === 'closed');
     for (const terminal of stale) {
-      await clearTerminal(terminal.id, token);
+      await clearTerminal(terminal.id, terminal.projectId, token);
     }
-    const refreshed = await getTerminals(token);
+    const scope = stale[0]?.projectId ?? terminalProjectScope;
+    const refreshed = await getTerminals(token, scope);
     if (refreshed.ok) {
       setTerminals(refreshed.data.terminals.map((t) => ({ id: t.id, title: t.title, status: t.status, projectId: t.projectId })));
     }
@@ -210,7 +216,7 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo(
     () => ({
       connectionState,
-      connected: connectionState === 'connected',
+      connected: connectionState === 'online',
       health,
       daemonPort,
       daemonUrl,

@@ -1,4 +1,4 @@
-import { DAEMON_API_PREFIX, SESSION_CLIENT_ID } from './config';
+import { DAEMON_API_PREFIX, RETRY_CONFIG, SESSION_CLIENT_ID } from './config';
 import type { FileNode, TerminalSession } from '@agentx/api-types';
 
 export interface HealthResponse {
@@ -38,6 +38,32 @@ export interface FileReadResponse {
 
 async function parseJson<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
+}
+
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shouldRetry(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+async function fetchWithRetry(input: RequestInfo | URL, init: RequestInit = {}) {
+  let attempt = 0;
+  let delay = RETRY_CONFIG.initialDelayMs;
+
+  while (true) {
+    const res = await fetch(input, init);
+    attempt += 1;
+
+    if (res.ok || attempt >= 3 || !shouldRetry(res.status)) {
+      return res;
+    }
+
+    await sleep(delay);
+    delay = Math.min(RETRY_CONFIG.maxDelayMs, Math.round(delay * RETRY_CONFIG.multiplier));
+  }
 }
 
 export async function getDiscovery() {
@@ -91,7 +117,7 @@ export async function daemonRequest<T>(
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  const res = await fetch(`${DAEMON_API_PREFIX}${normalizedPath}`, {
+  const res = await fetchWithRetry(`${DAEMON_API_PREFIX}${normalizedPath}`, {
     ...options,
     headers,
     cache: 'no-store',
@@ -121,21 +147,23 @@ export async function readFile(projectId: string, filePath: string, token: strin
 }
 
 
-export async function getTerminals(token: string | null, projectId?: string) {
-  const query = projectId ? `?${new URLSearchParams({ projectId }).toString()}` : '';
+export async function getTerminals(token: string | null, projectId: string) {
+  const query = `?${new URLSearchParams({ projectId }).toString()}`;
   return daemonRequest<{ terminals: TerminalSession[] }>(`/terminals${query}`, {}, token);
 }
 
-export async function killTerminal(terminalId: string, token: string | null) {
+export async function killTerminal(terminalId: string, projectId: string, token: string | null) {
   return daemonRequest<{ success: boolean; message: string }>(`/terminals/${terminalId}/kill`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ projectId }),
   }, token);
 }
 
-export async function clearTerminal(terminalId: string, token: string | null) {
+export async function clearTerminal(terminalId: string, projectId: string, token: string | null) {
   return daemonRequest<{ success: boolean; message: string }>(`/terminals/${terminalId}/clear`, {
     method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId }),
   }, token);
 }
