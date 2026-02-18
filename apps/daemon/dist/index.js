@@ -12,6 +12,7 @@ const helmet_1 = __importDefault(require("helmet"));
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const os_1 = __importDefault(require("os"));
+const http_1 = __importDefault(require("http"));
 const config_1 = require("./config");
 const auth_1 = require("./auth");
 const sandbox_1 = require("./sandbox");
@@ -98,10 +99,17 @@ async function main() {
     }
     fs_1.default.writeFileSync(path_1.default.join(runtimeDir, 'runtime.json'), JSON.stringify(runtimeConfig, null, 2));
     // Start server
-    app.listen(config_1.config.port, '127.0.0.1', () => {
+    const server = http_1.default.createServer(app);
+    // Explicitly reject websocket upgrades until WS auth is implemented
+    server.on('upgrade', (req, socket) => {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+    });
+    server.listen(config_1.config.port, '127.0.0.1', () => {
         console.log(`✅ Daemon running on http://127.0.0.1:${config_1.config.port}`);
         console.log(`📁 Sandbox: ${config_1.config.sandboxRoot}`);
         console.log(`🔒 Auth: ${auth_1.auth.isEnabled() ? 'enabled' : 'disabled'}`);
+        console.log('🔌 WebSocket upgrades: disabled until auth handshake is implemented');
     });
 }
 main().catch((err) => {

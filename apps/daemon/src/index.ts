@@ -8,6 +8,7 @@ import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import http from 'http';
 
 import { config, initializeConfig } from './config';
 import { auth } from './auth';
@@ -111,10 +112,19 @@ async function main() {
   );
   
   // Start server
-  app.listen(config.port, '127.0.0.1', () => {
+  const server = http.createServer(app);
+
+  // Explicitly reject websocket upgrades until WS auth is implemented
+  server.on('upgrade', (req, socket) => {
+    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+    socket.destroy();
+  });
+
+  server.listen(config.port, '127.0.0.1', () => {
     console.log(`✅ Daemon running on http://127.0.0.1:${config.port}`);
     console.log(`📁 Sandbox: ${config.sandboxRoot}`);
     console.log(`🔒 Auth: ${auth.isEnabled() ? 'enabled' : 'disabled'}`);
+    console.log('🔌 WebSocket upgrades: disabled until auth handshake is implemented');
   });
 }
 

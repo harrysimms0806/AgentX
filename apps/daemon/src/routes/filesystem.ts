@@ -169,6 +169,12 @@ router.post('/delete', (req, res) => {
     return;
   }
 
+  const writeCheck = canWrite(req, projectId);
+  if (!writeCheck.allowed) {
+    res.status(403).json({ error: writeCheck.error || 'Delete not allowed' });
+    return;
+  }
+
   const result = sandbox.softDelete(projectId, filePath);
   
   if (!result.allowed) {
@@ -187,6 +193,12 @@ router.post('/rename', (req, res) => {
   
   if (!projectId || !oldPath || !newPath) {
     res.status(400).json({ error: 'projectId, oldPath, and newPath required' });
+    return;
+  }
+
+  const writeCheck = canWrite(req, projectId);
+  if (!writeCheck.allowed) {
+    res.status(403).json({ error: writeCheck.error || 'Rename not allowed' });
     return;
   }
 

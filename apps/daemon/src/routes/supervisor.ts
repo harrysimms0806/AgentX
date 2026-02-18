@@ -97,7 +97,7 @@ router.get('/runs', (req, res) => {
 router.get('/runs/:id', (req, res) => {
   const { id } = req.params;
   const run = supervisor.getRun(id);
-  
+
   if (!run) {
     res.status(404).json({ error: 'Run not found' });
     return;
@@ -110,7 +110,7 @@ router.get('/runs/:id', (req, res) => {
 router.get('/runs/:id/output', (req, res) => {
   const { id } = req.params;
   const lines = parseInt(req.query.lines as string) || 50;
-  
+
   const output = supervisor.getRunOutput(id, lines);
   res.json({ output });
 });
@@ -120,7 +120,7 @@ router.post('/runs/:id/kill', async (req, res) => {
   const { id } = req.params;
   const { reason = 'user' } = req.body;
   const clientId = (req as any).session?.clientId || 'unknown';
-  
+
   const run = supervisor.getRun(id);
   if (!run) {
     res.status(404).json({ error: 'Run not found' });
@@ -133,7 +133,7 @@ router.post('/runs/:id/kill', async (req, res) => {
   }
 
   const success = await supervisor.killRun(id, reason);
-  
+
   if (success) {
     audit.log(run.projectId, 'user', 'RUN_KILL', { runId: id, reason }, clientId);
     res.json({ success: true, message: 'Kill signal sent' });
