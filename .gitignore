@@ -37,3 +37,6 @@ Thumbs.db
 
 # Runtime
 ~/.agentx/
+
+# Legacy app bundle (archived externally)
+macOS/
