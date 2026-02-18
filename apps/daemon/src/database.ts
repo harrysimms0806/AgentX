@@ -87,12 +87,51 @@ function createTables() {
     )
   `);
 
+  // Context packs table (Phase 5)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS context_packs (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      run_id TEXT,
+      created_at TEXT NOT NULL,
+      size_chars INTEGER NOT NULL,
+      sections_json TEXT NOT NULL,
+      snippet_ids_json TEXT,
+      retrieval_debug_json TEXT,
+      truncated INTEGER NOT NULL DEFAULT 0,
+      budget_chars INTEGER,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    )
+  `);
+
   // Create indexes
   db.exec('CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_audit_project ON audit_events(project_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_events(created_at)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_context_packs_project ON context_packs(project_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_context_packs_run ON context_packs(run_id)');
 }
+
+type StoredContextPack = {
+  id: string;
+  projectId: string;
+  runId?: string;
+  createdAt: string;
+  sections: {
+    summary: string;
+    activeTask?: string;
+    files: Array<{ path: string; summary: string }>;
+    gitStatus: string;
+    memories: string[];
+    userNotes: string;
+  };
+  sizeChars: number;
+  retrievedSnippetIds?: string[];
+  retrievalDebug?: Array<{ id: string; source: string; score: number; matchedKeywords: string[]; updatedAt: string }>;
+  truncated?: boolean;
+  budgetChars?: number;
+};
 
 // Project operations
 export const projectDb = {
@@ -384,6 +423,67 @@ export const auditDb = {
     const stmt = db!.prepare('SELECT COUNT(*) as count FROM audit_events');
     const row = stmt.get() as any;
     return row.count;
+  },
+};
+
+export const contextPackDb = {
+  create(pack: StoredContextPack): void {
+    const stmt = db!.prepare(`
+      INSERT OR REPLACE INTO context_packs (
+        id, project_id, run_id, created_at, size_chars, sections_json, snippet_ids_json, retrieval_debug_json, truncated, budget_chars
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    stmt.run(
+      pack.id,
+      pack.projectId,
+      pack.runId || null,
+      pack.createdAt,
+      pack.sizeChars,
+      JSON.stringify(pack.sections),
+      JSON.stringify(pack.retrievedSnippetIds || []),
+      JSON.stringify(pack.retrievalDebug || []),
+      pack.truncated ? 1 : 0,
+      pack.budgetChars || null,
+    );
+  },
+
+  getById(id: string): StoredContextPack | undefined {
+    const stmt = db!.prepare('SELECT * FROM context_packs WHERE id = ?');
+    const row = stmt.get(id) as any;
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      projectId: row.project_id,
+      runId: row.run_id || undefined,
+      createdAt: row.created_at,
+      sizeChars: row.size_chars,
+      sections: JSON.parse(row.sections_json),
+      retrievedSnippetIds: row.snippet_ids_json ? JSON.parse(row.snippet_ids_json) : [],
+      retrievalDebug: row.retrieval_debug_json ? JSON.parse(row.retrieval_debug_json) : [],
+      truncated: Boolean(row.truncated),
+      budgetChars: row.budget_chars || undefined,
+    };
+  },
+
+  getByProject(projectId: string, runId?: string): StoredContextPack[] {
+    const rows = runId
+      ? db!.prepare('SELECT * FROM context_packs WHERE project_id = ? AND run_id = ? ORDER BY created_at DESC').all(projectId, runId)
+      : db!.prepare('SELECT * FROM context_packs WHERE project_id = ? ORDER BY created_at DESC').all(projectId);
+
+    return (rows as any[]).map((row) => ({
+      id: row.id,
+      projectId: row.project_id,
+      runId: row.run_id || undefined,
+      createdAt: row.created_at,
+      sizeChars: row.size_chars,
+      sections: JSON.parse(row.sections_json),
+      retrievedSnippetIds: row.snippet_ids_json ? JSON.parse(row.snippet_ids_json) : [],
+      retrievalDebug: row.retrieval_debug_json ? JSON.parse(row.retrieval_debug_json) : [],
+      truncated: Boolean(row.truncated),
+      budgetChars: row.budget_chars || undefined,
+    }));
   },
 };
 

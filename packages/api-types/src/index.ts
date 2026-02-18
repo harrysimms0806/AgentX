@@ -86,16 +86,27 @@ export interface Run {
 export interface ContextPack {
   id: string;
   projectId: string;
-  runId: string;
+  runId?: string;
   createdAt: string;
-  injectedSections: {
+  sections: {
     summary: string;
-    files: string[];
-    diffs: string[];
+    activeTask?: string;
+    files: Array<{ path: string; summary: string }>;
+    gitStatus: string;
     memories: string[];
     userNotes: string;
   };
   sizeChars: number;
+  retrievedSnippetIds?: string[];
+  retrievalDebug?: Array<{
+    id: string;
+    source: string;
+    score: number;
+    matchedKeywords: string[];
+    updatedAt: string;
+  }>;
+  truncated?: boolean;
+  budgetChars?: number;
 }
 
 export interface AuditEvent {

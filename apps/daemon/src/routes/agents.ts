@@ -7,6 +7,7 @@ import { agentManager } from '../agents';
 import { agentRunner } from '../agent-runner';
 import { audit } from '../audit';
 import { projects } from '../store/projects';
+import { renderInjectedContext } from '../context-pack';
 
 const router = Router();
 
@@ -155,6 +156,99 @@ router.post('/spawn', async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to spawn agent', message: err.message });
   }
+});
+
+// POST /agents/context-pack/preview - Build context pack preview before send
+router.post('/context-pack/preview', async (req, res) => {
+  ensureInit();
+  const {
+    projectId,
+    prompt,
+    activeTask,
+    openFiles,
+    recentChanges,
+    userNotes,
+    userSnippets,
+    maxChars,
+  } = req.body;
+
+  if (!projectId || !prompt) {
+    res.status(400).json({ error: 'projectId and prompt are required' });
+    return;
+  }
+
+  const project = projects.get(projectId);
+  if (!project) {
+    res.status(404).json({ error: 'Project not found' });
+    return;
+  }
+
+  try {
+    const pack = await agentManager.previewContextPack({
+      projectId,
+      projectRootPath: project.rootPath,
+      prompt,
+      activeTask,
+      openFiles,
+      recentChanges,
+      userNotes,
+      userSnippets,
+      maxChars,
+    });
+
+    res.status(201).json({
+      contextPack: pack,
+      injectedContext: renderInjectedContext(pack),
+      budget: {
+        usedChars: pack.sizeChars,
+        maxChars: pack.budgetChars,
+        truncated: Boolean(pack.truncated),
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to generate context pack preview', message: err.message });
+  }
+});
+
+
+// GET /agents/context-packs - List persisted context packs for project
+router.get('/context-packs', (req, res) => {
+  ensureInit();
+  const projectId = req.query.projectId as string;
+  const runId = req.query.runId as string | undefined;
+
+  if (!projectId) {
+    res.status(400).json({ error: 'projectId is required' });
+    return;
+  }
+
+  const packs = agentManager.getStoredContextPacks(projectId, runId);
+  res.json({ contextPacks: packs });
+});
+
+// GET /agents/context-pack/:id - Retrieve persisted context pack for audit/replay
+router.get('/context-pack/:id', (req, res) => {
+  ensureInit();
+  const { id } = req.params;
+  const projectId = req.query.projectId as string;
+
+  if (!projectId) {
+    res.status(400).json({ error: 'projectId is required' });
+    return;
+  }
+
+  const packs = agentManager.getStoredContextPacks(projectId);
+  const pack = packs.find((candidate) => candidate.id === id);
+
+  if (!pack) {
+    res.status(404).json({ error: 'Context pack not found' });
+    return;
+  }
+
+  res.json({
+    contextPack: pack,
+    injectedContext: renderInjectedContext(pack),
+  });
 });
 
 // POST /agents/instances/:id/task - Add a task/checkpoint

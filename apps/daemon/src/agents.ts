@@ -3,9 +3,12 @@
 
 import { randomUUID } from 'crypto';
 import { runDb } from './database';
+import { contextPackDb } from './database';
 import { audit } from './audit';
 import { supervisor } from './supervisor';
 import { sandbox } from './sandbox';
+import { projects } from './store/projects';
+import { buildContextPack, type ContextPackBuildInput } from './context-pack';
 import type { Run } from '@agentx/api-types';
 
 // Agent types based on role
@@ -68,16 +71,22 @@ export interface AgentTask {
 export interface ContextPack {
   id: string;
   projectId: string;
+  runId?: string;
   agentId?: string;
   createdAt: string;
   sections: {
     summary: string;           // Project overview
+    activeTask?: string;       // User active task
     files: FileContext[];      // Key files with summaries
     gitStatus: string;         // Current changes
     memories: string[];        // Relevant past actions
     userNotes: string;         // Specific instructions
   };
   sizeChars: number;
+  retrievedSnippetIds?: string[];
+  retrievalDebug?: Array<{ id: string; source: string; score: number; matchedKeywords: string[]; updatedAt: string }>;
+  truncated?: boolean;
+  budgetChars?: number;
 }
 
 export interface FileContext {
@@ -262,6 +271,16 @@ class AgentManager {
     return this.contextPacks.get(id);
   }
 
+  getStoredContextPacks(projectId: string, runId?: string): ContextPack[] {
+    return contextPackDb.getByProject(projectId, runId);
+  }
+
+  async previewContextPack(input: ContextPackBuildInput): Promise<ContextPack> {
+    const pack = buildContextPack(input);
+    this.contextPacks.set(pack.id, pack);
+    return pack;
+  }
+
   // Spawn agent as a run (integration with supervisor)
   async spawn(
     definitionId: string,
@@ -274,8 +293,21 @@ class AgentManager {
 
     // Create context pack if not provided
     if (!contextPackId) {
-      const pack = await this.generateContextPack(projectId);
+      const pack = await this.generateContextPack({
+        projectId,
+        prompt,
+      });
       instance.contextPackId = pack.id;
+    } else {
+      const existingPack = this.contextPacks.get(contextPackId) || contextPackDb.getById(contextPackId);
+      if (!existingPack) {
+        throw new Error(`Context pack ${contextPackId} not found`);
+      }
+      if (existingPack.projectId !== projectId) {
+        throw new Error('Context pack does not belong to project');
+      }
+      this.contextPacks.set(existingPack.id, existingPack);
+      instance.contextPackId = existingPack.id;
     }
 
     // Create run via supervisor
@@ -298,6 +330,12 @@ class AgentManager {
     instance.status = 'running';
     instance.updatedAt = new Date().toISOString();
 
+    const contextPack = this.contextPacks.get(instance.contextPackId!);
+    if (contextPack) {
+      contextPack.runId = runId;
+      contextPackDb.create(contextPack);
+    }
+
     // Log
     await audit.log({
       id: randomUUID(),
@@ -312,16 +350,18 @@ class AgentManager {
   }
 
   // Generate context pack from project
-  private async generateContextPack(projectId: string): Promise<ContextPack> {
-    // This would analyze the project and generate summaries
-    // For now, placeholder
-    return this.createContextPack(projectId, {
-      summary: 'Project context (to be implemented)',
-      files: [],
-      gitStatus: '',
-      memories: [],
-      userNotes: '',
+  private async generateContextPack(input: { projectId: string; prompt: string }): Promise<ContextPack> {
+    const project = projects.get(input.projectId);
+    if (!project) {
+      throw new Error(`Project ${input.projectId} not found`);
+    }
+    const pack = buildContextPack({
+      projectId: input.projectId,
+      projectRootPath: project.rootPath,
+      prompt: input.prompt,
     });
+    this.contextPacks.set(pack.id, pack);
+    return pack;
   }
 
   // Handoff agent to another agent

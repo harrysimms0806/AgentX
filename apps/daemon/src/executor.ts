@@ -4,6 +4,7 @@
 import { randomUUID } from 'crypto';
 import path from 'path';
 import type { AgentDefinition, AgentInstance, ContextPack, AgentTask } from './agents';
+import { renderInjectedContext } from './context-pack';
 
 // Model providers
 export type ModelProvider = 'openai' | 'anthropic' | 'ollama' | 'openclaw';
@@ -212,17 +213,8 @@ export class AgentExecutor {
 You have access to the following tools. Use them to complete your task:
 ${agentTools.map(t => `- ${t.function.name}: ${t.function.description}`).join('\n')}
 
-Project Context:
-${contextPack.sections.summary}
-
-Relevant Files:
-${contextPack.sections.files.map(f => `- ${f.path}: ${f.summary}`).join('\n')}
-
-Git Status:
-${contextPack.sections.gitStatus}
-
-User Notes:
-${contextPack.sections.userNotes}
+Project Context Pack:
+${renderInjectedContext(contextPack)}
 
 When you need to use a tool, respond with a tool call. When done, use the 'complete' tool.`,
     });
