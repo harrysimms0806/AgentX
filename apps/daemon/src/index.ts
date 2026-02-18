@@ -1,5 +1,5 @@
 // AgentX Daemon - Phase 2 Implementation
-// Core daemon with auth, sandbox, audit, supervisor + SQLite persistence, locks, git
+// Core daemon with auth, sandbox, audit, supervisor + SQLite persistence, locks
 
 import express from 'express';
 import cors from 'cors';
@@ -24,7 +24,6 @@ import { fsRouter } from './routes/filesystem';
 import { auditRouter } from './routes/audit';
 import { supervisorRouter } from './routes/supervisor';
 import { locksRouter } from './routes/locks';
-import { gitRouter } from './routes/git';
 
 const app = express();
 
@@ -72,7 +71,6 @@ app.use('/fs', authMiddleware, fsRouter);
 app.use('/audit', authMiddleware, auditRouter);
 app.use('/supervisor', authMiddleware, supervisorRouter);
 app.use('/locks', authMiddleware, locksRouter);
-app.use('/git', authMiddleware, gitRouter);
 
 // Error handler
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {

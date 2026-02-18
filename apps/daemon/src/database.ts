@@ -310,6 +310,13 @@ export const lockDb = {
     }
   },
 
+  cleanupExpired(maxAgeMs: number): number {
+    const cutoffIso = new Date(Date.now() - maxAgeMs).toISOString();
+    const stmt = db!.prepare('DELETE FROM file_locks WHERE locked_at < ?');
+    const result = stmt.run(cutoffIso);
+    return result.changes;
+  },
+
   release(projectId: string, filePath: string, lockedBy: string): boolean {
     const stmt = db!.prepare('DELETE FROM file_locks WHERE project_id = ? AND file_path = ? AND locked_by = ?');
     const result = stmt.run(projectId, filePath, lockedBy);

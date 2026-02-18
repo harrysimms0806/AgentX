@@ -1,4 +1,5 @@
 import { DAEMON_API_PREFIX, SESSION_CLIENT_ID } from './config';
+import type { FileNode } from '@agentx/api-types';
 
 export interface HealthResponse {
   status: string;
@@ -22,6 +23,17 @@ export interface DiscoveryResponse {
 export interface ApiError {
   error: string;
   code?: string;
+}
+
+export interface FileTreeResponse {
+  path: string;
+  truncated: boolean;
+  nodes: FileNode[];
+}
+
+export interface FileReadResponse {
+  content: string;
+  size: number;
 }
 
 async function parseJson<T>(res: Response): Promise<T> {
@@ -92,4 +104,18 @@ export async function daemonRequest<T>(
 
   const data = await parseJson<T>(res);
   return { ok: true, data };
+}
+
+export async function getProjects(token: string | null) {
+  return daemonRequest<Array<{ id: string; name: string }>>('/projects', {}, token);
+}
+
+export async function getFileTree(projectId: string, dirPath: string, token: string | null) {
+  const query = new URLSearchParams({ projectId, path: dirPath }).toString();
+  return daemonRequest<FileTreeResponse>(`/fs/tree?${query}`, {}, token);
+}
+
+export async function readFile(projectId: string, filePath: string, token: string | null) {
+  const query = new URLSearchParams({ projectId, path: filePath }).toString();
+  return daemonRequest<FileReadResponse>(`/fs/read?${query}`, {}, token);
 }
