@@ -5,6 +5,28 @@ import { audit } from '../audit';
 
 const router = Router();
 
+// POST /supervisor/runs - Create a new run
+router.post('/runs', (req, res) => {
+  const { projectId, type, timeoutMs } = req.body;
+  const clientId = (req as any).session?.clientId || 'unknown';
+
+  if (!projectId || !type) {
+    res.status(400).json({ error: 'projectId and type required' });
+    return;
+  }
+
+  if (!['agent', 'command', 'git', 'index'].includes(type)) {
+    res.status(400).json({ error: 'Invalid type' });
+    return;
+  }
+
+  const run = supervisor.createRun(projectId, type, clientId, timeoutMs);
+
+  audit.log(projectId, 'user', 'RUN_CREATE', { runId: run.id, type, timeoutMs }, clientId);
+
+  res.status(201).json(run);
+});
+
 // GET /supervisor/runs - List all runs
 router.get('/runs', (req, res) => {
   const { projectId } = req.query;
@@ -16,6 +38,7 @@ router.get('/runs', (req, res) => {
     ownerAgentId: r.ownerAgentId,
     status: r.status,
     pid: r.pid,
+    timeoutMs: r.timeoutMs,
     startedAt: r.startedAt,
     endedAt: r.endedAt,
     exitCode: r.exitCode,

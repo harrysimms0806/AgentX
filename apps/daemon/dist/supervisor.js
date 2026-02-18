@@ -133,9 +133,16 @@ class Supervisor {
     }
     /**
      * Create a new run record
+     * @param timeoutMs - Optional timeout in milliseconds (clamped to safe max)
      */
-    createRun(projectId, type, ownerAgentId) {
+    createRun(projectId, type, ownerAgentId, timeoutMs) {
         const id = (0, crypto_1.randomUUID)();
+        // Clamp timeout to safe range (1 min to 30 min)
+        const MAX_TIMEOUT = 30 * 60 * 1000; // 30 minutes
+        const MIN_TIMEOUT = 60 * 1000; // 1 minute
+        const effectiveTimeout = timeoutMs
+            ? Math.max(MIN_TIMEOUT, Math.min(timeoutMs, MAX_TIMEOUT))
+            : undefined;
         const run = {
             id,
             projectId,
@@ -145,13 +152,14 @@ class Supervisor {
             logsPath: path_1.default.join(this.logsDir, `${id}.log`),
             outputBuffer: [],
             bufferedBytes: 0,
+            timeoutMs: effectiveTimeout,
         };
         this.runs.set(id, run);
         // Create log file
         run.logStream = fs_1.default.createWriteStream(run.logsPath);
         // Persist new run
         this.persistRuns();
-        console.log(`▶️ Created run ${id} (${type})`);
+        console.log(`▶️ Created run ${id} (${type})${effectiveTimeout ? ` timeout=${effectiveTimeout}ms` : ''}`);
         return run;
     }
     /**
@@ -225,12 +233,13 @@ class Supervisor {
             this.persistRuns();
             console.log(`⏹️ Run ${runId} finished with code ${code}`);
         });
-        // Set timeout
+        // Set timeout (use run-specific timeout if set, otherwise use default)
+        const timeoutMs = run.timeoutMs || this.defaultTimeout;
         setTimeout(() => {
             if (run.status === 'running') {
                 this.killRun(runId, 'timeout');
             }
-        }, this.defaultTimeout);
+        }, timeoutMs);
     }
     /**
      * Kill a run

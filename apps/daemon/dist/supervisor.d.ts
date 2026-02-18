@@ -6,6 +6,7 @@ interface RunRecord extends Run {
     outputBuffer: string[];
     bufferedBytes: number;
     logStream?: fs.WriteStream;
+    timeoutMs?: number;
 }
 declare class Supervisor {
     private runs;
@@ -29,8 +30,9 @@ declare class Supervisor {
     private loadPersistedRuns;
     /**
      * Create a new run record
+     * @param timeoutMs - Optional timeout in milliseconds (clamped to safe max)
      */
-    createRun(projectId: string, type: 'agent' | 'command' | 'git' | 'index', ownerAgentId?: string): RunRecord;
+    createRun(projectId: string, type: 'agent' | 'command' | 'git' | 'index', ownerAgentId?: string, timeoutMs?: number): RunRecord;
     /**
      * Spawn a command
      * Phase 0: Basic skeleton - full implementation in Phase 3

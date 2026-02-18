@@ -10,6 +10,7 @@ interface RunRecord extends Run {
   outputBuffer: string[];
   bufferedBytes: number;  // Track total bytes in buffer
   logStream?: fs.WriteStream;
+  timeoutMs?: number;  // Per-run timeout override
 }
 
 class Supervisor {
@@ -115,13 +116,23 @@ class Supervisor {
 
   /**
    * Create a new run record
+   * @param timeoutMs - Optional timeout in milliseconds (clamped to safe max)
    */
   createRun(
     projectId: string,
     type: 'agent' | 'command' | 'git' | 'index',
-    ownerAgentId?: string
+    ownerAgentId?: string,
+    timeoutMs?: number
   ): RunRecord {
     const id = randomUUID();
+    
+    // Clamp timeout to safe range (1 min to 30 min)
+    const MAX_TIMEOUT = 30 * 60 * 1000; // 30 minutes
+    const MIN_TIMEOUT = 60 * 1000; // 1 minute
+    const effectiveTimeout = timeoutMs 
+      ? Math.max(MIN_TIMEOUT, Math.min(timeoutMs, MAX_TIMEOUT))
+      : undefined;
+    
     const run: RunRecord = {
       id,
       projectId,
@@ -131,6 +142,7 @@ class Supervisor {
       logsPath: path.join(this.logsDir, `${id}.log`),
       outputBuffer: [],
       bufferedBytes: 0,
+      timeoutMs: effectiveTimeout,
     };
 
     this.runs.set(id, run);
@@ -141,7 +153,7 @@ class Supervisor {
     // Persist new run
     this.persistRuns();
     
-    console.log(`▶️ Created run ${id} (${type})`);
+    console.log(`▶️ Created run ${id} (${type})${effectiveTimeout ? ` timeout=${effectiveTimeout}ms` : ''}`);
     return run;
   }
 
@@ -236,12 +248,13 @@ class Supervisor {
       console.log(`⏹️ Run ${runId} finished with code ${code}`);
     });
 
-    // Set timeout
+    // Set timeout (use run-specific timeout if set, otherwise use default)
+    const timeoutMs = run.timeoutMs || this.defaultTimeout;
     setTimeout(() => {
       if (run.status === 'running') {
         this.killRun(runId, 'timeout');
       }
-    }, this.defaultTimeout);
+    }, timeoutMs);
   }
 
   /**
