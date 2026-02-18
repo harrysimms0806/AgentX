@@ -3,6 +3,8 @@ import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { spawn, ChildProcess } from 'child_process';
+import { spawn as spawnPty, type IPty } from 'node-pty';
+import { EventEmitter } from 'events';
 import { Run } from '@agentx/api-types';
 
 interface RunRecord extends Run {
@@ -13,7 +15,24 @@ interface RunRecord extends Run {
   timeoutMs?: number;  // Per-run timeout override
 }
 
-class Supervisor {
+
+
+interface TerminalRecord {
+  id: string;
+  projectId: string;
+  cwd: string;
+  title: string;
+  status: 'active' | 'closed' | 'stale';
+  createdAt: string;
+  lastActiveAt: string;
+  pid?: number;
+  pty?: IPty;
+  outputBuffer: string[];
+  bufferedBytes: number;
+  logsPath: string;
+  logStream?: fs.WriteStream;
+}
+class Supervisor extends EventEmitter {
   private runs: Map<string, RunRecord> = new Map();
   private logsDir: string = '';
   private runtimeDir: string = '';
@@ -24,6 +43,15 @@ class Supervisor {
   private initialized: boolean = false;
   private runsFile: string = '';
   private rotationInterval: NodeJS.Timeout | null = null;
+
+
+  private terminals: Map<string, TerminalRecord> = new Map();
+  private terminalsFile: string = '';
+  private maxTerminalBufferBytes: number = 2 * 1024 * 1024;
+
+  constructor() {
+    super();
+  }
 
   private toPublicRun(run: RunRecord): Run {
     return {
@@ -49,6 +77,7 @@ class Supervisor {
     this.logRetention = config.logRetention;
     this.maxOutputBuffer = config.maxOutputBuffer;
     this.runsFile = path.join(config.runtimeDir, 'runs.json');
+    this.terminalsFile = path.join(config.runtimeDir, 'terminals.json');
     this.initialized = true;
     
     // Ensure logs directory exists
@@ -58,6 +87,7 @@ class Supervisor {
     
     // Load persisted runs and mark stale
     await this.loadPersistedRuns();
+    await this.loadPersistedTerminals();
     
     // Start log rotation scheduler (every hour)
     this.rotationInterval = setInterval(() => {
@@ -485,6 +515,220 @@ class Supervisor {
     return cleaned;
   }
 
+
+  private persistTerminals(): void {
+    if (!this.terminalsFile) return;
+
+    const serializable = Array.from(this.terminals.values()).map((t) => ({
+      id: t.id,
+      projectId: t.projectId,
+      cwd: t.cwd,
+      title: t.title,
+      status: t.status,
+      createdAt: t.createdAt,
+      lastActiveAt: t.lastActiveAt,
+      pid: t.pty?.pid || t.pid,
+      logsPath: t.logsPath,
+    }));
+
+    fs.writeFileSync(this.terminalsFile, JSON.stringify({ terminals: serializable }, null, 2));
+  }
+
+  private async loadPersistedTerminals(): Promise<void> {
+    if (!this.terminalsFile || !fs.existsSync(this.terminalsFile)) return;
+
+    try {
+      const data = JSON.parse(fs.readFileSync(this.terminalsFile, 'utf8'));
+      const persisted = data.terminals || [];
+      for (const term of persisted) {
+        const status = term.status === 'active' ? 'stale' : term.status;
+        const terminal: TerminalRecord = {
+          id: term.id,
+          projectId: term.projectId,
+          cwd: term.cwd,
+          title: term.title,
+          status,
+          createdAt: term.createdAt,
+          lastActiveAt: term.lastActiveAt,
+          pid: term.pid,
+          outputBuffer: [],
+          bufferedBytes: 0,
+          logsPath: term.logsPath || path.join(this.logsDir, `terminal-${term.id}.log`),
+        };
+        this.terminals.set(terminal.id, terminal);
+      }
+      if (persisted.length > 0) {
+        this.persistTerminals();
+      }
+    } catch (err) {
+      console.warn('Failed to load persisted terminals:', err);
+    }
+  }
+
+  private appendTerminalOutput(terminal: TerminalRecord, chunk: string): void {
+    const chunkBytes = Buffer.byteLength(chunk, 'utf8');
+
+    while (terminal.outputBuffer.length > 0 && terminal.bufferedBytes + chunkBytes > this.maxTerminalBufferBytes) {
+      const removed = terminal.outputBuffer.shift();
+      if (removed) {
+        terminal.bufferedBytes -= Buffer.byteLength(removed, 'utf8');
+      }
+    }
+
+    if (chunkBytes <= this.maxTerminalBufferBytes) {
+      terminal.outputBuffer.push(chunk);
+      terminal.bufferedBytes += chunkBytes;
+    }
+
+    if (!terminal.logStream) {
+      terminal.logStream = fs.createWriteStream(terminal.logsPath, { flags: 'a' });
+    }
+
+    this.checkLogSize({
+      id: terminal.id,
+      projectId: terminal.projectId,
+      type: 'command',
+      status: 'running',
+      logsPath: terminal.logsPath,
+      outputBuffer: [],
+      bufferedBytes: 0,
+      logStream: terminal.logStream,
+    } as RunRecord);
+
+    terminal.logStream?.write(chunk);
+  }
+
+  createTerminal(projectId: string, cwd: string, shell?: string): TerminalRecord {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    const selectedShell = shell || process.env.SHELL || '/bin/bash';
+
+    const terminal: TerminalRecord = {
+      id,
+      projectId,
+      cwd,
+      title: path.basename(cwd),
+      status: 'active',
+      createdAt: now,
+      lastActiveAt: now,
+      outputBuffer: [],
+      bufferedBytes: 0,
+      logsPath: path.join(this.logsDir, `terminal-${id}.log`),
+      logStream: fs.createWriteStream(path.join(this.logsDir, `terminal-${id}.log`), { flags: 'a' }),
+    };
+
+    const pty = spawnPty(selectedShell, [], {
+      name: 'xterm-color',
+      cols: 80,
+      rows: 24,
+      cwd,
+      env: {
+        ...process.env,
+        TERM: 'xterm-256color',
+        AGENTX_PROJECT_ID: projectId,
+        AGENTX_TERMINAL_ID: id,
+      },
+    });
+
+    terminal.pty = pty;
+    terminal.pid = pty.pid;
+
+    pty.onData((data) => {
+      terminal.lastActiveAt = new Date().toISOString();
+      this.appendTerminalOutput(terminal, data);
+      this.emit('terminal:data', { terminalId: id, data });
+    });
+
+    pty.onExit(({ exitCode }) => {
+      terminal.status = exitCode === 0 ? 'closed' : 'stale';
+      terminal.lastActiveAt = new Date().toISOString();
+      terminal.logStream?.end();
+      this.persistTerminals();
+      this.emit('terminal:exit', { terminalId: id, exitCode });
+    });
+
+    this.terminals.set(id, terminal);
+    this.persistTerminals();
+    return terminal;
+  }
+
+  listTerminals(projectId?: string): TerminalRecord[] {
+    let all = Array.from(this.terminals.values());
+    if (projectId) {
+      all = all.filter((t) => t.projectId === projectId);
+    }
+    return all.sort((a, b) => new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime());
+  }
+
+  getTerminal(id: string): TerminalRecord | undefined {
+    return this.terminals.get(id);
+  }
+
+  writeTerminal(id: string, data: string): boolean {
+    const terminal = this.terminals.get(id);
+    if (!terminal || terminal.status !== 'active' || !terminal.pty) return false;
+    terminal.pty.write(data);
+    terminal.lastActiveAt = new Date().toISOString();
+    this.persistTerminals();
+    return true;
+  }
+
+  resizeTerminal(id: string, cols: number, rows: number): boolean {
+    const terminal = this.terminals.get(id);
+    if (!terminal || terminal.status !== 'active' || !terminal.pty) return false;
+    terminal.pty.resize(cols, rows);
+    return true;
+  }
+
+  async killTerminal(id: string, reason: string = 'user'): Promise<boolean> {
+    const terminal = this.terminals.get(id);
+    if (!terminal || !terminal.pty) return false;
+
+    const pty = terminal.pty;
+    let exited = false;
+
+    const onExit = () => {
+      exited = true;
+    };
+
+    pty.onExit(onExit);
+    pty.kill('SIGTERM');
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    if (!exited) {
+      try {
+        pty.kill('SIGKILL');
+      } catch (err) {
+        // noop
+      }
+    }
+
+    terminal.status = 'closed';
+    terminal.lastActiveAt = new Date().toISOString();
+    terminal.logStream?.write(`
+--- terminal killed (${reason}) at ${new Date().toISOString()} ---
+`);
+    terminal.logStream?.end();
+    terminal.pty = undefined;
+    this.persistTerminals();
+    return true;
+  }
+
+  clearTerminal(id: string): boolean {
+    const terminal = this.terminals.get(id);
+    if (!terminal) return false;
+    this.terminals.delete(id);
+    this.persistTerminals();
+    return true;
+  }
+
+  getTerminalOutput(id: string): string[] {
+    const terminal = this.terminals.get(id);
+    if (!terminal) return [];
+    return [...terminal.outputBuffer];
+  }
+
+
   /**
    * Shutdown cleanup
    */
@@ -549,8 +793,23 @@ class Supervisor {
       console.log('✅ All processes terminated');
     }
 
+    // Shutdown terminals
+    const activeTerminals = Array.from(this.terminals.values()).filter(t => t.status === 'active' && t.pty);
+    for (const terminal of activeTerminals) {
+      try {
+        terminal.pty?.kill('SIGTERM');
+        terminal.pty?.kill('SIGKILL');
+      } catch (err) {
+        // ignore
+      }
+      terminal.status = 'stale';
+      terminal.pty = undefined;
+      terminal.logStream?.end();
+    }
+
     // Persist final state
     this.persistRuns();
+    this.persistTerminals();
     console.log('🔧 Supervisor shutdown complete');
   }
 }

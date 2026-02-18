@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { createSessionToken, getDiscovery, getHealth, type HealthResponse } from '@/lib/daemon/client';
+import { clearTerminal, createSessionToken, getDiscovery, getHealth, getTerminals, killTerminal, type HealthResponse } from '@/lib/daemon/client';
 import { RETRY_CONFIG } from '@/lib/daemon/config';
 
 export type DaemonConnectionState =
@@ -22,6 +22,12 @@ interface DaemonContextType {
   currentProject: string;
   safeModeLabel: string;
   activeRuns: number;
+
+  terminals: Array<{ id: string; title: string; status: 'active' | 'closed' | 'stale'; projectId: string }>;
+  activeTerminals: number;
+  staleTerminals: number;
+  killTerminalSession: (id: string) => Promise<void>;
+  clearStaleTerminals: () => Promise<void>;
   token: string | null;
   statusMessage: string;
   retryAttempt: number;
@@ -39,6 +45,11 @@ const DaemonContext = createContext<DaemonContextType>({
   currentProject: 'No project selected',
   safeModeLabel: 'Safe mode: on',
   activeRuns: 0,
+  terminals: [],
+  activeTerminals: 0,
+  staleTerminals: 0,
+  killTerminalSession: async () => {},
+  clearStaleTerminals: async () => {},
   token: null,
   statusMessage: 'Waiting for daemon discovery…',
   retryAttempt: 0,
@@ -59,6 +70,7 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
   const [discoverySource, setDiscoverySource] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState('Waiting for daemon discovery…');
+  const [terminals, setTerminals] = useState<Array<{ id: string; title: string; status: 'active' | 'closed' | 'stale'; projectId: string }>>([]);
   const [retryAttempt, setRetryAttempt] = useState(0);
   const [lastHealthAt, setLastHealthAt] = useState<string | null>(null);
   const [lastAuthAt, setLastAuthAt] = useState<string | null>(null);
@@ -148,6 +160,17 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
       setLastAuthAt(nowIso);
       setConnectionState('connected');
       setStatusMessage(`Connected to daemon on port ${healthResult.data.daemonPort}.`);
+
+      const terminalResult = await getTerminals(session.token);
+      if (terminalResult.ok) {
+        setTerminals(terminalResult.data.terminals.map((t) => ({
+          id: t.id,
+          title: t.title,
+          status: t.status,
+          projectId: t.projectId,
+        })));
+      }
+
       scheduleRetry(1);
     };
 
@@ -161,6 +184,29 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+
+
+  const killTerminalSession = async (id: string) => {
+    if (!token) return;
+    await killTerminal(id, token);
+    const refreshed = await getTerminals(token);
+    if (refreshed.ok) {
+      setTerminals(refreshed.data.terminals.map((t) => ({ id: t.id, title: t.title, status: t.status, projectId: t.projectId })));
+    }
+  };
+
+  const clearStaleTerminals = async () => {
+    if (!token) return;
+    const stale = terminals.filter((terminal) => terminal.status === 'stale' || terminal.status === 'closed');
+    for (const terminal of stale) {
+      await clearTerminal(terminal.id, token);
+    }
+    const refreshed = await getTerminals(token);
+    if (refreshed.ok) {
+      setTerminals(refreshed.data.terminals.map((t) => ({ id: t.id, title: t.title, status: t.status, projectId: t.projectId })));
+    }
+  };
+
   const value = useMemo(
     () => ({
       connectionState,
@@ -172,6 +218,11 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
       currentProject: 'No project selected',
       safeModeLabel: 'Safe mode: on',
       activeRuns: 0,
+      terminals,
+      activeTerminals: terminals.filter((terminal) => terminal.status === 'active').length,
+      staleTerminals: terminals.filter((terminal) => terminal.status === 'stale').length,
+      killTerminalSession,
+      clearStaleTerminals,
       token,
       statusMessage,
       retryAttempt,
@@ -189,6 +240,8 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
       retryAttempt,
       lastHealthAt,
       lastAuthAt,
+      killTerminalSession,
+      clearStaleTerminals,
     ]
   );
 

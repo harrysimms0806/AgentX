@@ -27,6 +27,11 @@ export default function StatusBar() {
     currentProject,
     safeModeLabel,
     activeRuns,
+    terminals,
+    activeTerminals,
+    staleTerminals,
+    killTerminalSession,
+    clearStaleTerminals,
     daemonPort,
     daemonUrl,
     statusMessage,
@@ -76,6 +81,35 @@ export default function StatusBar() {
             <span>{activeRuns} Active Run{activeRuns !== 1 ? 's' : ''}</span>
           </div>
         )}
+
+        {activeTerminals > 0 && (
+          <div className="status-item running">
+            <span className="status-dot running" />
+            <span>{activeTerminals} Active Terminal{activeTerminals !== 1 ? 's' : ''}</span>
+          </div>
+        )}
+
+        {staleTerminals > 0 && (
+          <div className="status-item warning">
+            <span>{staleTerminals} stale terminal{staleTerminals !== 1 ? 's' : ''}</span>
+            <button className="status-action" onClick={() => void clearStaleTerminals()}>
+              Clear
+            </button>
+          </div>
+        )}
+
+        {terminals.slice(0, 2).map((terminal) => (
+          <div key={terminal.id} className="status-item endpoint">
+            <span className="label">Term:</span>
+            <span className="value muted">{terminal.title} ({terminal.status})</span>
+            {terminal.status === 'active' && (
+              <button className="status-action" onClick={() => void killTerminalSession(terminal.id)}>
+                Kill
+              </button>
+            )}
+          </div>
+        ))}
+
       </div>
 
       <style jsx>{`
@@ -157,6 +191,21 @@ export default function StatusBar() {
 
         .status-item.endpoint .value.muted {
           max-width: 240px;
+        }
+
+        .status-action {
+          border: 1px solid var(--border);
+          background: transparent;
+          color: var(--text-secondary);
+          border-radius: 6px;
+          font-size: 11px;
+          padding: 1px 6px;
+          cursor: pointer;
+        }
+
+        .status-action:hover {
+          color: var(--text-primary);
+          border-color: var(--text-secondary);
         }
       `}</style>
     </footer>

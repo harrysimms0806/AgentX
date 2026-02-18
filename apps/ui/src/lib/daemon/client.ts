@@ -1,5 +1,5 @@
 import { DAEMON_API_PREFIX, SESSION_CLIENT_ID } from './config';
-import type { FileNode } from '@agentx/api-types';
+import type { FileNode, TerminalSession } from '@agentx/api-types';
 
 export interface HealthResponse {
   status: string;
@@ -118,4 +118,24 @@ export async function getFileTree(projectId: string, dirPath: string, token: str
 export async function readFile(projectId: string, filePath: string, token: string | null) {
   const query = new URLSearchParams({ projectId, path: filePath }).toString();
   return daemonRequest<FileReadResponse>(`/fs/read?${query}`, {}, token);
+}
+
+
+export async function getTerminals(token: string | null, projectId?: string) {
+  const query = projectId ? `?${new URLSearchParams({ projectId }).toString()}` : '';
+  return daemonRequest<{ terminals: TerminalSession[] }>(`/terminals${query}`, {}, token);
+}
+
+export async function killTerminal(terminalId: string, token: string | null) {
+  return daemonRequest<{ success: boolean; message: string }>(`/terminals/${terminalId}/kill`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  }, token);
+}
+
+export async function clearTerminal(terminalId: string, token: string | null) {
+  return daemonRequest<{ success: boolean; message: string }>(`/terminals/${terminalId}/clear`, {
+    method: 'DELETE',
+  }, token);
 }

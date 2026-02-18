@@ -1,276 +1,205 @@
 // Terminal Session Manager
 // Phase 3: WebSocket-based interactive terminals
 
-import { spawn, IPty } from 'node-pty';
-import path from 'path';
-import { randomUUID } from 'crypto';
 import type { TerminalSession } from '@agentx/api-types';
-import { sandbox } from './sandbox';
+import { supervisor } from './supervisor';
+import { validateTerminalAccess } from './terminal-policy';
 
 export interface Terminal {
   id: string;
   projectId: string;
-  pty: IPty;
   cwd: string;
   createdAt: string;
   lastActiveAt: string;
   title: string;
   status: 'active' | 'closed' | 'stale';
+  pid?: number;
   dataHandlers: Set<(data: string) => void>;
 }
 
 class TerminalManager {
   private terminals: Map<string, Terminal> = new Map();
-  private cleanupInterval: NodeJS.Timeout | null = null;
 
   initialize(): void {
-    // Clean up stale terminals every 5 minutes
-    this.cleanupInterval = setInterval(() => {
-      this.cleanupStale();
-    }, 5 * 60 * 1000);
+    supervisor.on('terminal:data', ({ terminalId, data }: { terminalId: string; data: string }) => {
+      const terminal = this.terminals.get(terminalId);
+      if (!terminal) return;
+      terminal.lastActiveAt = new Date().toISOString();
+      for (const handler of terminal.dataHandlers) {
+        handler(data);
+      }
+    });
+
+    supervisor.on('terminal:exit', ({ terminalId }: { terminalId: string }) => {
+      const terminal = this.terminals.get(terminalId);
+      if (!terminal) return;
+      const latest = supervisor.getTerminal(terminalId);
+      terminal.status = latest?.status || 'stale';
+      terminal.pid = latest?.pid;
+      terminal.lastActiveAt = new Date().toISOString();
+    });
+
+    // Hydrate persisted terminal sessions from supervisor registry.
+    for (const existing of supervisor.listTerminals()) {
+      this.terminals.set(existing.id, {
+        id: existing.id,
+        projectId: existing.projectId,
+        cwd: existing.cwd,
+        createdAt: existing.createdAt,
+        lastActiveAt: existing.lastActiveAt,
+        title: existing.title,
+        status: existing.status,
+        pid: existing.pid,
+        dataHandlers: new Set(),
+      });
+    }
 
     console.log('🖥️  Terminal manager initialized');
   }
 
-  /**
-   * Create a new terminal session
-   */
   create(projectId: string, cwd?: string, shell?: string): Terminal {
-    // Validate project
-    const projectCheck = sandbox.getProjectPath(projectId);
-    if (!projectCheck.allowed) {
-      throw new Error(projectCheck.error || 'Invalid project');
+    const policy = validateTerminalAccess(projectId, cwd);
+    if (!policy.allowed || !policy.realCwd) {
+      const error = new Error(policy.error || 'Terminal blocked');
+      (error as any).code = policy.code || 'TERMINAL_BLOCKED';
+      throw error;
     }
 
-    // Determine working directory
-    const workingDir = cwd 
-      ? path.join(projectCheck.path, cwd)
-      : projectCheck.path;
-
-    // Determine shell (default to user's shell)
-    const userShell = shell || process.env.SHELL || '/bin/bash';
-
-    const id = randomUUID();
-    const now = new Date().toISOString();
-
-    // Create PTY
-    const pty = spawn(userShell, [], {
-      name: 'xterm-color',
-      cols: 80,
-      rows: 24,
-      cwd: workingDir,
-      env: {
-        ...process.env,
-        TERM: 'xterm-256color',
-        AGENTX_PROJECT_ID: projectId,
-        AGENTX_TERMINAL_ID: id,
-      },
-    });
-
+    const created = supervisor.createTerminal(projectId, policy.realCwd, shell);
     const terminal: Terminal = {
-      id,
-      projectId,
-      pty,
-      cwd: workingDir,
-      createdAt: now,
-      lastActiveAt: now,
-      title: path.basename(workingDir),
-      status: 'active',
+      id: created.id,
+      projectId: created.projectId,
+      cwd: created.cwd,
+      createdAt: created.createdAt,
+      lastActiveAt: created.lastActiveAt,
+      title: created.title,
+      status: created.status,
+      pid: created.pid,
       dataHandlers: new Set(),
     };
 
-    // Broadcast data to all attached handlers
-    pty.onData((data) => {
-      terminal.lastActiveAt = new Date().toISOString();
-      for (const handler of terminal.dataHandlers) {
-        try {
-          handler(data);
-        } catch (err) {
-          // Remove failed handler
-          terminal.dataHandlers.delete(handler);
-        }
-      }
-    });
-
-    // Handle exit
-    pty.onExit(({ exitCode }) => {
-      terminal.status = exitCode === 0 ? 'closed' : 'stale';
-      console.log(`Terminal ${id} exited with code ${exitCode}`);
-    });
-
-    this.terminals.set(id, terminal);
-
-    console.log(`Created terminal ${id} for project ${projectId}`);
+    this.terminals.set(terminal.id, terminal);
     return terminal;
   }
 
-  /**
-   * Get a terminal by ID
-   */
   get(id: string): Terminal | undefined {
-    return this.terminals.get(id);
+    const terminal = this.terminals.get(id);
+    if (!terminal) return undefined;
+
+    const latest = supervisor.getTerminal(id);
+    if (latest) {
+      terminal.status = latest.status;
+      terminal.lastActiveAt = latest.lastActiveAt;
+      terminal.pid = latest.pid;
+      terminal.cwd = latest.cwd;
+    }
+
+    return terminal;
   }
 
-  /**
-   * Attach a data handler to a terminal
-   */
   attach(id: string, handler: (data: string) => void): boolean {
-    const terminal = this.terminals.get(id);
+    const terminal = this.get(id);
     if (!terminal || terminal.status !== 'active') {
       return false;
     }
+
     terminal.dataHandlers.add(handler);
+
+    // Replay bounded recent output for late subscribers.
+    const recent = supervisor.getTerminalOutput(id);
+    for (const chunk of recent) {
+      handler(chunk);
+    }
+
     return true;
   }
 
-  /**
-   * Detach a data handler from a terminal
-   */
   detach(id: string, handler: (data: string) => void): boolean {
     const terminal = this.terminals.get(id);
     if (!terminal) return false;
     return terminal.dataHandlers.delete(handler);
   }
 
-  /**
-   * Get all terminals for a project
-   */
   getByProject(projectId: string): TerminalSession[] {
-    const sessions: TerminalSession[] = [];
-    for (const terminal of this.terminals.values()) {
-      if (terminal.projectId === projectId) {
-        sessions.push(this.toSession(terminal));
-      }
-    }
-    return sessions.sort((a, b) => 
-      new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime()
-    );
+    return this.getAll().filter((terminal) => terminal.projectId === projectId);
   }
 
-  /**
-   * Get all active terminals
-   */
   getAll(): TerminalSession[] {
-    const sessions: TerminalSession[] = [];
-    for (const terminal of this.terminals.values()) {
-      sessions.push(this.toSession(terminal));
+    // Keep local session map synchronized with supervisor for stale visibility.
+    const known = supervisor.listTerminals();
+    for (const row of known) {
+      const existing = this.terminals.get(row.id);
+      if (existing) {
+        existing.projectId = row.projectId;
+        existing.cwd = row.cwd;
+        existing.createdAt = row.createdAt;
+        existing.lastActiveAt = row.lastActiveAt;
+        existing.title = row.title;
+        existing.status = row.status;
+        existing.pid = row.pid;
+        continue;
+      }
+
+      this.terminals.set(row.id, {
+        id: row.id,
+        projectId: row.projectId,
+        cwd: row.cwd,
+        createdAt: row.createdAt,
+        lastActiveAt: row.lastActiveAt,
+        title: row.title,
+        status: row.status,
+        pid: row.pid,
+        dataHandlers: new Set(),
+      });
     }
-    return sessions.sort((a, b) => 
-      new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime()
-    );
+
+    return Array.from(this.terminals.values())
+      .map((terminal) => ({
+        id: terminal.id,
+        projectId: terminal.projectId,
+        cwd: terminal.cwd,
+        pid: terminal.pid,
+        createdAt: terminal.createdAt,
+        lastActiveAt: terminal.lastActiveAt,
+        title: terminal.title,
+        status: terminal.status,
+      }))
+      .sort((a, b) => new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime());
   }
 
-  /**
-   * Resize a terminal
-   */
   resize(id: string, cols: number, rows: number): boolean {
-    const terminal = this.terminals.get(id);
-    if (!terminal || terminal.status !== 'active') {
-      return false;
-    }
-
-    terminal.pty.resize(cols, rows);
-    return true;
+    return supervisor.resizeTerminal(id, cols, rows);
   }
 
-  /**
-   * Write data to terminal
-   */
   write(id: string, data: string): boolean {
-    const terminal = this.terminals.get(id);
-    if (!terminal || terminal.status !== 'active') {
-      return false;
-    }
-
-    terminal.pty.write(data);
-    terminal.lastActiveAt = new Date().toISOString();
-    return true;
+    return supervisor.writeTerminal(id, data);
   }
 
-  /**
-   * Kill a terminal
-   */
   kill(id: string): boolean {
     const terminal = this.terminals.get(id);
-    if (!terminal) {
-      return false;
-    }
+    if (!terminal) return false;
 
-    terminal.pty.kill();
+    supervisor.killTerminal(id, 'user');
     terminal.status = 'closed';
     terminal.dataHandlers.clear();
-    this.terminals.delete(id);
-    console.log(`Killed terminal ${id}`);
     return true;
   }
 
-  /**
-   * Kill all terminals for a project
-   */
+  clear(id: string): boolean {
+    this.terminals.delete(id);
+    return supervisor.clearTerminal(id);
+  }
+
   killByProject(projectId: string): number {
-    let count = 0;
-    for (const [id, terminal] of this.terminals) {
-      if (terminal.projectId === projectId) {
-        terminal.pty.kill();
-        terminal.status = 'closed';
-        terminal.dataHandlers.clear();
-        this.terminals.delete(id);
-        count++;
-      }
+    const terminals = this.getByProject(projectId);
+    for (const terminal of terminals) {
+      this.kill(terminal.id);
     }
-    console.log(`Killed ${count} terminals for project ${projectId}`);
-    return count;
+    return terminals.length;
   }
 
-  /**
-   * Clean up stale terminals (inactive for >30 minutes)
-   */
-  private cleanupStale(): void {
-    const now = new Date();
-    const staleThreshold = 30 * 60 * 1000; // 30 minutes
-
-    for (const [id, terminal] of this.terminals) {
-      const lastActive = new Date(terminal.lastActiveAt);
-      const inactiveTime = now.getTime() - lastActive.getTime();
-
-      if (inactiveTime > staleThreshold) {
-        console.log(`Cleaning up stale terminal ${id}`);
-        terminal.pty.kill();
-        terminal.status = 'stale';
-        terminal.dataHandlers.clear();
-        this.terminals.delete(id);
-      }
-    }
-  }
-
-  /**
-   * Convert Terminal to TerminalSession (API-safe)
-   */
-  private toSession(terminal: Terminal): TerminalSession {
-    return {
-      id: terminal.id,
-      projectId: terminal.projectId,
-      cwd: terminal.cwd,
-      pid: terminal.pty.pid,
-      createdAt: terminal.createdAt,
-      lastActiveAt: terminal.lastActiveAt,
-      title: terminal.title,
-      status: terminal.status,
-    };
-  }
-
-  /**
-   * Shutdown all terminals
-   */
   shutdown(): void {
-    if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval);
-    }
-
-    console.log(`Shutting down ${this.terminals.size} terminals...`);
-    for (const [id, terminal] of this.terminals) {
-      terminal.pty.kill();
-      terminal.status = 'closed';
+    for (const terminal of this.terminals.values()) {
       terminal.dataHandlers.clear();
     }
     this.terminals.clear();

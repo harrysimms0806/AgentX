@@ -18,49 +18,69 @@ interface WSClient {
   onDataHandler?: (data: string) => void;
 }
 
+const MAX_WS_BUFFERED_BYTES = 1024 * 1024; // 1MB per connection
+
 class WebSocketServerManager {
   private wss: WebSocketServer | null = null;
   private clients: Map<string, WSClient> = new Map();
 
-  /**
-   * Initialize WebSocket server
-   */
   initialize(server: any): void {
-    this.wss = new WebSocketServer({ 
+    this.wss = new WebSocketServer({
       server,
       path: '/ws',
+      verifyClient: (info, done) => {
+        const authHeader = info.req.headers.authorization;
+        const protocolHeader = info.req.headers['sec-websocket-protocol'];
+
+        let token: string | undefined;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+          token = authHeader.slice('Bearer '.length);
+        } else if (typeof protocolHeader === 'string' && protocolHeader.startsWith('bearer,')) {
+          // Browser fallback: subprotocol format "bearer,<token>".
+          token = protocolHeader.slice('bearer,'.length);
+        }
+
+        if (!token) {
+          done(false, 401, 'Authorization required (Bearer header or bearer subprotocol)');
+          return;
+        }
+        const session = auth.validateToken(token);
+        if (!session) {
+          done(false, 401, 'Invalid or expired token');
+          return;
+        }
+
+        (info.req as any).session = session;
+        done(true);
+      },
     });
 
     this.wss.on('connection', (ws, req) => {
       this.handleConnection(ws, req);
     });
 
-    console.log('🔌 WebSocket server initialized on /ws');
+    console.log('🔌 WebSocket server initialized on /ws (header-auth required)');
   }
 
-  /**
-   * Handle new WebSocket connection
-   */
   private handleConnection(ws: WebSocket, req: IncomingMessage): void {
     const clientId = randomUUID();
+    const session = (req as any).session;
     const client: WSClient = {
       id: clientId,
       ws,
-      authenticated: false,
-      clientId: '',
+      authenticated: !!session,
+      clientId: session?.clientId || 'unknown',
     };
 
     this.clients.set(clientId, client);
-    console.log(`WS client connected: ${clientId}`);
+    console.log(`WS client connected: ${clientId} (${client.clientId})`);
 
-    // Send welcome message
     this.send(client, {
       type: 'connected',
       clientId,
-      message: 'WebSocket connected. Send auth handshake to continue.',
+      authenticated: true,
     });
 
-    // Handle messages
     ws.on('message', (data) => {
       try {
         const message = JSON.parse(data.toString());
@@ -68,117 +88,72 @@ class WebSocketServerManager {
       } catch (err) {
         this.send(client, {
           type: 'error',
+          code: 'INVALID_JSON',
           error: 'Invalid JSON message',
         });
       }
     });
 
-    // Handle close
     ws.on('close', () => {
       this.handleDisconnect(client);
     });
 
-    // Handle errors
     ws.on('error', (err) => {
       console.error(`WS error for ${clientId}:`, err);
     });
   }
 
-  /**
-   * Handle incoming WebSocket message
-   */
   private async handleMessage(client: WSClient, message: any): Promise<void> {
     const { type } = message;
 
-    // Auth handshake must be first message
-    if (!client.authenticated && type !== 'auth') {
+    if (!client.authenticated) {
       this.send(client, {
         type: 'error',
-        error: 'Authentication required. Send auth handshake first.',
+        code: 'AUTH_REQUIRED',
+        error: 'Authentication required',
       });
+      client.ws.close(1008, 'auth required');
       return;
     }
 
     switch (type) {
-      case 'auth':
-        await this.handleAuth(client, message);
-        break;
-
       case 'terminal:create':
         await this.handleTerminalCreate(client, message);
         break;
-
       case 'terminal:attach':
         await this.handleTerminalAttach(client, message);
         break;
-
       case 'terminal:resize':
         this.handleTerminalResize(client, message);
         break;
-
       case 'terminal:data':
         this.handleTerminalData(client, message);
         break;
-
       case 'terminal:kill':
-        this.handleTerminalKill(client, message);
+        await this.handleTerminalKill(client, message);
         break;
-
       case 'terminal:list':
         this.handleTerminalList(client, message);
         break;
-
+      case 'terminal:clear':
+        this.handleTerminalClear(client, message);
+        break;
       default:
         this.send(client, {
           type: 'error',
+          code: 'UNKNOWN_MESSAGE_TYPE',
           error: `Unknown message type: ${type}`,
         });
     }
   }
 
-  /**
-   * Handle auth handshake
-   */
-  private async handleAuth(client: WSClient, message: any): Promise<void> {
-    const { token } = message;
-
-    if (!token) {
-      this.send(client, {
-        type: 'auth:failed',
-        error: 'Token required',
-      });
-      return;
-    }
-
-    const session = await auth.validateToken(token);
-    if (!session) {
-      this.send(client, {
-        type: 'auth:failed',
-        error: 'Invalid or expired token',
-      });
-      return;
-    }
-
-    client.authenticated = true;
-    client.clientId = session.clientId;
-
-    this.send(client, {
-      type: 'auth:success',
-      clientId: session.clientId,
-    });
-
-    console.log(`WS client ${client.id} authenticated as ${session.clientId}`);
-  }
-
-  /**
-   * Handle terminal creation
-   */
   private async handleTerminalCreate(client: WSClient, message: any): Promise<void> {
     const { projectId, cwd, shell } = message;
 
     if (!projectId) {
       this.send(client, {
         type: 'terminal:error',
+        code: 'PROJECT_ID_REQUIRED',
         error: 'projectId required',
       });
       return;
@@ -193,7 +168,7 @@ class WebSocketServerManager {
         actorType: 'user',
         actorId: client.clientId,
         actionType: 'TERMINAL_CREATE',
-        payload: { cwd, shell },
+        payload: { cwd: terminal.cwd, shell, sessionId: terminal.id, pid: terminal.pid },
         createdAt: new Date().toISOString(),
       });
 
@@ -203,6 +178,7 @@ class WebSocketServerManager {
           id: terminal.id,
           projectId: terminal.projectId,
           cwd: terminal.cwd,
+          pid: terminal.pid,
           title: terminal.title,
           status: terminal.status,
         },
@@ -210,14 +186,12 @@ class WebSocketServerManager {
     } catch (err: any) {
       this.send(client, {
         type: 'terminal:error',
-        error: err.message,
+        code: err?.code || 'TERMINAL_CREATE_FAILED',
+        error: err?.message || 'Failed to create terminal',
       });
     }
   }
 
-  /**
-   * Handle terminal attachment (start receiving/sending data)
-   */
   private async handleTerminalAttach(client: WSClient, message: any): Promise<void> {
     const { terminalId } = message;
 
@@ -225,17 +199,16 @@ class WebSocketServerManager {
     if (!terminal) {
       this.send(client, {
         type: 'terminal:error',
+        code: 'TERMINAL_NOT_FOUND',
         error: 'Terminal not found',
       });
       return;
     }
 
-    // Detach from previous terminal if any
     if (client.terminalId && client.onDataHandler) {
       terminalManager.detach(client.terminalId, client.onDataHandler);
     }
 
-    // Create data handler for this client
     const onData = (data: string) => {
       this.send(client, {
         type: 'terminal:data',
@@ -244,17 +217,16 @@ class WebSocketServerManager {
       });
     };
 
-    // Attach to terminal
     const attached = terminalManager.attach(terminalId, onData);
     if (!attached) {
       this.send(client, {
         type: 'terminal:error',
+        code: 'TERMINAL_ATTACH_FAILED',
         error: 'Failed to attach to terminal',
       });
       return;
     }
 
-    // Store references
     client.terminalId = terminalId;
     client.projectId = terminal.projectId;
     client.onDataHandler = onData;
@@ -263,19 +235,15 @@ class WebSocketServerManager {
       type: 'terminal:attached',
       terminalId,
     });
-
-    console.log(`Client ${client.id} attached to terminal ${terminalId}`);
   }
 
-  /**
-   * Handle terminal resize
-   */
   private handleTerminalResize(client: WSClient, message: any): void {
     const { terminalId, cols, rows } = message;
 
     if (!terminalId || !cols || !rows) {
       this.send(client, {
         type: 'terminal:error',
+        code: 'RESIZE_DIMENSIONS_REQUIRED',
         error: 'terminalId, cols, and rows required',
       });
       return;
@@ -285,22 +253,20 @@ class WebSocketServerManager {
     if (!success) {
       this.send(client, {
         type: 'terminal:error',
+        code: 'TERMINAL_NOT_ACTIVE',
         error: 'Failed to resize terminal',
       });
     }
   }
 
-  /**
-   * Handle terminal data (input from client)
-   */
   private handleTerminalData(client: WSClient, message: any): void {
     const { terminalId, data } = message;
 
-    // Use attached terminal or specified one
     const targetId = terminalId || client.terminalId;
     if (!targetId) {
       this.send(client, {
         type: 'terminal:error',
+        code: 'TERMINAL_NOT_ATTACHED',
         error: 'No terminal attached or specified',
       });
       return;
@@ -310,14 +276,12 @@ class WebSocketServerManager {
     if (!success) {
       this.send(client, {
         type: 'terminal:error',
+        code: 'TERMINAL_WRITE_FAILED',
         error: 'Failed to write to terminal',
       });
     }
   }
 
-  /**
-   * Handle terminal kill
-   */
   private async handleTerminalKill(client: WSClient, message: any): Promise<void> {
     const { terminalId } = message;
 
@@ -329,7 +293,7 @@ class WebSocketServerManager {
         actorType: 'user',
         actorId: client.clientId,
         actionType: 'TERMINAL_KILL',
-        payload: { terminalId },
+        payload: { terminalId, sessionId: terminalId, pid: terminal.pid },
         createdAt: new Date().toISOString(),
       });
     }
@@ -348,13 +312,20 @@ class WebSocketServerManager {
     }
   }
 
-  /**
-   * Handle terminal list request
-   */
+  private handleTerminalClear(client: WSClient, message: any): void {
+    const { terminalId } = message;
+    const success = terminalManager.clear(terminalId);
+    this.send(client, {
+      type: 'terminal:cleared',
+      terminalId,
+      success,
+    });
+  }
+
   private handleTerminalList(client: WSClient, message: any): void {
     const { projectId } = message;
 
-    const terminals = projectId 
+    const terminals = projectId
       ? terminalManager.getByProject(projectId)
       : terminalManager.getAll();
 
@@ -364,13 +335,7 @@ class WebSocketServerManager {
     });
   }
 
-  /**
-   * Handle client disconnect
-   */
   private handleDisconnect(client: WSClient): void {
-    console.log(`WS client disconnected: ${client.id}`);
-
-    // Detach from terminal
     if (client.terminalId && client.onDataHandler) {
       terminalManager.detach(client.terminalId, client.onDataHandler);
     }
@@ -378,18 +343,17 @@ class WebSocketServerManager {
     this.clients.delete(client.id);
   }
 
-  /**
-   * Send message to client
-   */
   private send(client: WSClient, message: any): void {
-    if (client.ws.readyState === WebSocket.OPEN) {
-      client.ws.send(JSON.stringify(message));
+    if (client.ws.readyState !== WebSocket.OPEN) return;
+
+    if (client.ws.bufferedAmount > MAX_WS_BUFFERED_BYTES) {
+      client.ws.close(1009, 'Client backpressure overflow');
+      return;
     }
+
+    client.ws.send(JSON.stringify(message));
   }
 
-  /**
-   * Shutdown all connections
-   */
   shutdown(): void {
     console.log(`Closing ${this.clients.size} WebSocket connections...`);
 
