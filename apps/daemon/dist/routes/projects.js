@@ -48,12 +48,19 @@ router.post('/', (req, res) => {
         return;
     }
     // Create sandbox directory
-    if (!sandbox_1.sandbox.createProject(id)) {
-        res.status(500).json({ error: 'Failed to create project directory' });
+    const createResult = sandbox_1.sandbox.createProject(id);
+    if (!createResult.success) {
+        res.status(500).json({ error: createResult.error || 'Failed to create project directory' });
+        return;
+    }
+    // Get project path
+    const pathResult = sandbox_1.sandbox.getProjectPath(id);
+    if (!pathResult.allowed) {
+        res.status(500).json({ error: pathResult.error || 'Failed to get project path' });
         return;
     }
     // Create project structure
-    const projectPath = sandbox_1.sandbox.getProjectPath(id);
+    const projectPath = pathResult.path;
     fs_1.default.mkdirSync(path_1.default.join(projectPath, 'app'), { recursive: true });
     fs_1.default.mkdirSync(path_1.default.join(projectPath, 'docs'), { recursive: true });
     fs_1.default.mkdirSync(path_1.default.join(projectPath, 'memory'), { recursive: true });

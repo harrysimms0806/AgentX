@@ -43,9 +43,10 @@ app.use((0, cors_1.default)({
     credentials: true,
 }));
 app.use(express_1.default.json({ limit: '10mb' }));
-// Routes
+// Routes - /health is the ONLY public endpoint (per Phase 0 requirements)
 app.use('/health', health_1.healthRouter);
-app.use('/auth', auth_3.authRouter);
+app.use('/auth', auth_3.authPublicRouter); // /auth/session - public
+app.use('/auth', auth_2.authMiddleware, auth_3.authProtectedRouter); // /auth/revoke - protected
 app.use('/projects', auth_2.authMiddleware, projects_1.projectsRouter);
 app.use('/fs', auth_2.authMiddleware, filesystem_1.fsRouter);
 app.use('/audit', auth_2.authMiddleware, audit_2.auditRouter);
@@ -60,6 +61,8 @@ app.use((err, req, res, next) => {
 // Initialize and start
 async function main() {
     console.log('🔧 AgentX Daemon - Phase 0');
+    // Initialize config first (includes port discovery)
+    await (0, config_1.initializeConfig)();
     console.log(`Sandbox root: ${config_1.config.sandboxRoot}`);
     // Initialize subsystems
     await auth_1.auth.initialize();
@@ -88,4 +91,17 @@ async function main() {
 main().catch((err) => {
     console.error('Failed to start daemon:', err);
     process.exit(1);
+});
+// Graceful shutdown handlers
+process.on('SIGINT', () => {
+    console.log('\n🛑 Received SIGINT, shutting down...');
+    supervisor_1.supervisor.shutdown();
+    audit_1.audit.shutdown();
+    process.exit(0);
+});
+process.on('SIGTERM', () => {
+    console.log('\n🛑 Received SIGTERM, shutting down...');
+    supervisor_1.supervisor.shutdown();
+    audit_1.audit.shutdown();
+    process.exit(0);
 });

@@ -3,8 +3,12 @@ declare class Audit {
     private logPath;
     private buffer;
     private flushInterval;
-    constructor();
+    private sensitiveKeys;
     initialize(): Promise<void>;
+    /**
+     * Redact sensitive values from payload
+     */
+    private redactPayload;
     /**
      * Append an audit event
      * This is the ONLY way to write to the audit log

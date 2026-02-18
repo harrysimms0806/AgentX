@@ -1,12 +1,12 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.authRouter = void 0;
+exports.authProtectedRouter = exports.authPublicRouter = void 0;
 // Authentication endpoints
 const express_1 = require("express");
 const auth_1 = require("../auth");
 const router = (0, express_1.Router)();
-exports.authRouter = router;
-// POST /auth/session - Create new session
+exports.authPublicRouter = router;
+// POST /auth/session - Create new session (PUBLIC - no auth required)
 router.post('/session', (req, res) => {
     const { clientId } = req.body;
     if (!clientId || typeof clientId !== 'string') {
@@ -19,14 +19,17 @@ router.post('/session', (req, res) => {
         expiresAt: null, // Sessions don't expire in Phase 0
     });
 });
-// POST /auth/revoke - Revoke session
-router.post('/revoke', (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) {
-        res.status(401).json({ error: 'Authorization header required' });
+// Protected auth routes (require valid Bearer token)
+const protectedRouter = (0, express_1.Router)();
+exports.authProtectedRouter = protectedRouter;
+// POST /auth/revoke - Revoke session (PROTECTED - requires auth)
+protectedRouter.post('/revoke', (req, res) => {
+    // Token already validated by authMiddleware, get it from session
+    const token = req.session?.token;
+    if (!token) {
+        res.status(401).json({ error: 'Token not found in session' });
         return;
     }
-    const token = authHeader.split(' ')[1];
     const revoked = auth_1.auth.revokeSession(token);
     if (revoked) {
         res.json({ status: 'revoked' });
