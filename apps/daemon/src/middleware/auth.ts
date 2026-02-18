@@ -3,11 +3,8 @@ import { Request, Response, NextFunction } from 'express';
 import { auth } from '../auth';
 
 export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
-  // Allow health checks without auth
-  if (req.path === '/health') {
-    next();
-    return;
-  }
+  // Note: Public routes (/health, /auth/session) are mounted WITHOUT this middleware
+  // This middleware enforces Bearer token auth for ALL routes that use it
 
   const authHeader = req.headers.authorization;
   
