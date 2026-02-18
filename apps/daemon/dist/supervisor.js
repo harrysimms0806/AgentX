@@ -292,6 +292,48 @@ class Supervisor {
         return true;
     }
     /**
+     * List runs with optional project filter
+     */
+    listRuns(projectId) {
+        return Array.from(this.runs.values())
+            .filter(r => !projectId || r.projectId === projectId)
+            .map(r => ({
+            id: r.id,
+            projectId: r.projectId,
+            type: r.type,
+            ownerAgentId: r.ownerAgentId,
+            status: r.status,
+            pid: r.pid,
+            startedAt: r.startedAt,
+            endedAt: r.endedAt,
+            exitCode: r.exitCode,
+            logsPath: r.logsPath,
+            summary: r.summary,
+        }));
+    }
+    /**
+     * Cleanup stale completed runs older than maxAgeMs
+     */
+    cleanupRuns(projectId, maxAgeMs = 24 * 60 * 60 * 1000) {
+        const now = Date.now();
+        let cleaned = 0;
+        for (const run of Array.from(this.runs.values())) {
+            if (!run.endedAt || run.status === 'running')
+                continue;
+            if (projectId && run.projectId !== projectId)
+                continue;
+            const age = now - new Date(run.endedAt).getTime();
+            if (age > maxAgeMs) {
+                this.runs.delete(run.id);
+                cleaned++;
+            }
+        }
+        if (cleaned > 0) {
+            this.persistRuns();
+        }
+        return cleaned;
+    }
+    /**
      * Get run status
      */
     getRun(runId) {

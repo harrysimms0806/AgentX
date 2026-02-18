@@ -49,6 +49,14 @@ declare class Supervisor {
      */
     killRun(runId: string, reason?: string): Promise<boolean>;
     /**
+     * List runs with optional project filter
+     */
+    listRuns(projectId?: string): Run[];
+    /**
+     * Cleanup stale completed runs older than maxAgeMs
+     */
+    cleanupRuns(projectId?: string, maxAgeMs?: number): number;
+    /**
      * Get run status
      */
     getRun(runId: string): Run | undefined;

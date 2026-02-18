@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.projectsRouter = void 0;
+exports.getProjectById = getProjectById;
 // Projects management
 const express_1 = require("express");
 const fs_1 = __importDefault(require("fs"));

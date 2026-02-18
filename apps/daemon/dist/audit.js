@@ -113,10 +113,8 @@ class Audit {
         };
         // Add to buffer for batch writing
         this.buffer.push(JSON.stringify(event));
-        // Immediate flush for critical actions
-        if (['WRITE', 'DELETE', 'EXEC'].includes(actionType)) {
-            this.flush();
-        }
+        // Flush immediately for privileged actions to reduce loss window
+        this.flush();
         return event;
     }
     /**
