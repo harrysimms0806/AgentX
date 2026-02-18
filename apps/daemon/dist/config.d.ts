@@ -1,4 +1,4 @@
-interface Config {
+export interface Config {
     port: number;
     uiPort: number;
     sandboxRoot: string;
@@ -9,5 +9,9 @@ interface Config {
     defaultTimeout: number;
     logRetention: number;
 }
-export declare const config: Config;
-export {};
+export declare let config: Config;
+/**
+ * Initialize configuration with port discovery
+ * Must be called before accessing config
+ */
+export declare function initializeConfig(): Promise<Config>;

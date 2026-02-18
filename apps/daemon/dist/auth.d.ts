@@ -8,7 +8,6 @@ declare class Auth {
     private sessions;
     private sessionsFile;
     private enabled;
-    constructor();
     initialize(): Promise<void>;
     createSession(clientId: string): Session;
     validateToken(token: string): Session | null;
