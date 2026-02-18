@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.projectsRouter = void 0;
+exports.getProjectById = getProjectById;
 // Projects management
 const express_1 = require("express");
 const fs_1 = __importDefault(require("fs"));
@@ -14,6 +15,9 @@ const router = (0, express_1.Router)();
 exports.projectsRouter = router;
 // In-memory store for Phase 0 (replace with SQLite in future)
 const projects = new Map();
+function getProjectById(projectId) {
+    return projects.get(projectId);
+}
 // Default project settings
 const defaultSettings = {
     capabilities: {

@@ -12,6 +12,10 @@ const router = Router();
 // In-memory store for Phase 0 (replace with SQLite in future)
 const projects: Map<string, Project> = new Map();
 
+export function getProjectById(projectId: string): Project | undefined {
+  return projects.get(projectId);
+}
+
 // Default project settings
 const defaultSettings: ProjectSettings = {
   capabilities: {

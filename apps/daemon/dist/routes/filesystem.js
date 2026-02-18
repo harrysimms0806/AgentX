@@ -10,14 +10,22 @@ const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const sandbox_1 = require("../sandbox");
 const audit_1 = require("../audit");
+const projects_1 = require("./projects");
 const router = (0, express_1.Router)();
 exports.fsRouter = router;
 // Helper to check write capabilities
 function canWrite(req, projectId) {
-    // TODO: Check project settings from database
-    // For Phase 0, we check if safeMode is enabled
-    // This is a simplified check - full implementation in Phase 2
-    return { allowed: true }; // Placeholder
+    const project = (0, projects_1.getProjectById)(projectId);
+    if (!project) {
+        return { allowed: false, error: 'Project not found' };
+    }
+    if (project.settings.safeMode) {
+        return { allowed: false, error: 'FS_WRITE disabled by policy (safeMode enabled)' };
+    }
+    if (!project.settings.capabilities.FS_WRITE) {
+        return { allowed: false, error: 'FS_WRITE disabled by capability policy' };
+    }
+    return { allowed: true };
 }
 // GET /fs/tree?projectId= - Get file tree
 router.get('/tree', (req, res) => {
@@ -129,6 +137,11 @@ router.post('/delete', (req, res) => {
         res.status(400).json({ error: 'projectId and path required' });
         return;
     }
+    const writeCheck = canWrite(req, projectId);
+    if (!writeCheck.allowed) {
+        res.status(403).json({ error: writeCheck.error || 'Delete not allowed' });
+        return;
+    }
     const result = sandbox_1.sandbox.softDelete(projectId, filePath);
     if (!result.allowed) {
         res.status(403).json({ error: result.error });
@@ -142,6 +155,11 @@ router.post('/rename', (req, res) => {
     const { projectId, oldPath, newPath } = req.body;
     if (!projectId || !oldPath || !newPath) {
         res.status(400).json({ error: 'projectId, oldPath, and newPath required' });
+        return;
+    }
+    const writeCheck = canWrite(req, projectId);
+    if (!writeCheck.allowed) {
+        res.status(403).json({ error: writeCheck.error || 'Rename not allowed' });
         return;
     }
     const oldCheck = sandbox_1.sandbox.validatePath(projectId, oldPath);

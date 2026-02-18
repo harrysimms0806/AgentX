@@ -4,16 +4,27 @@ import fs from 'fs';
 import path from 'path';
 import { sandbox } from '../sandbox';
 import { audit } from '../audit';
+import { getProjectById } from './projects';
 import { FileNode } from '@agentx/api-types';
 
 const router = Router();
 
 // Helper to check write capabilities
 function canWrite(req: any, projectId: string): { allowed: boolean; error?: string } {
-  // TODO: Check project settings from database
-  // For Phase 0, we check if safeMode is enabled
-  // This is a simplified check - full implementation in Phase 2
-  return { allowed: true }; // Placeholder
+  const project = getProjectById(projectId);
+  if (!project) {
+    return { allowed: false, error: 'Project not found' };
+  }
+
+  if (project.settings.safeMode) {
+    return { allowed: false, error: 'FS_WRITE disabled by policy (safeMode enabled)' };
+  }
+
+  if (!project.settings.capabilities.FS_WRITE) {
+    return { allowed: false, error: 'FS_WRITE disabled by capability policy' };
+  }
+
+  return { allowed: true };
 }
 
 // GET /fs/tree?projectId= - Get file tree
@@ -149,6 +160,12 @@ router.post('/delete', (req, res) => {
     return;
   }
 
+  const writeCheck = canWrite(req, projectId);
+  if (!writeCheck.allowed) {
+    res.status(403).json({ error: writeCheck.error || 'Delete not allowed' });
+    return;
+  }
+
   const result = sandbox.softDelete(projectId, filePath);
   
   if (!result.allowed) {
@@ -167,6 +184,12 @@ router.post('/rename', (req, res) => {
   
   if (!projectId || !oldPath || !newPath) {
     res.status(400).json({ error: 'projectId, oldPath, and newPath required' });
+    return;
+  }
+
+  const writeCheck = canWrite(req, projectId);
+  if (!writeCheck.allowed) {
+    res.status(403).json({ error: writeCheck.error || 'Rename not allowed' });
     return;
   }
 
