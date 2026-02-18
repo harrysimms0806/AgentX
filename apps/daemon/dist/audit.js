@@ -40,10 +40,12 @@ exports.audit = void 0;
 // Append-only audit logging
 const fs_1 = __importDefault(require("fs"));
 const crypto_1 = require("crypto");
+const database_1 = require("./database");
 class Audit {
     logPath = '';
     buffer = [];
     flushInterval = null;
+    dbInitialized = false;
     // Sensitive keys that should be redacted from logs
     sensitiveKeys = [
         'token',
@@ -66,7 +68,7 @@ class Audit {
         // Get config at initialization time (after port discovery)
         const { config } = await Promise.resolve().then(() => __importStar(require('./config')));
         this.logPath = config.auditLogPath;
-        // Ensure log file exists
+        // Ensure log file exists (keep for backward compatibility)
         if (!fs_1.default.existsSync(this.logPath)) {
             fs_1.default.writeFileSync(this.logPath, '');
         }
@@ -97,9 +99,25 @@ class Audit {
     }
     /**
      * Append an audit event
-     * This is the ONLY way to write to the audit log
+     * Phase 2: Dual-write to JSONL (backup) and SQLite (query)
      */
-    log(projectId, actorType, actionType, payload, actorId) {
+    async log(event) {
+        // Ensure DB is initialized
+        if (!this.dbInitialized) {
+            (0, database_1.initDatabase)();
+            this.dbInitialized = true;
+        }
+        // Write to SQLite for querying
+        database_1.auditDb.append(event);
+        // Also write to JSONL for backup/export compatibility
+        this.buffer.push(JSON.stringify(event));
+        this.flush();
+        return event;
+    }
+    /**
+     * Legacy log method for backward compatibility
+     */
+    logLegacy(projectId, actorType, actionType, payload, actorId) {
         // Redact sensitive fields from payload
         const safePayload = this.redactPayload(payload);
         const event = {
@@ -111,37 +129,21 @@ class Audit {
             payload: safePayload,
             createdAt: new Date().toISOString(),
         };
-        // Add to buffer for batch writing
-        this.buffer.push(JSON.stringify(event));
-        // Flush immediately for privileged actions to reduce loss window
-        this.flush();
+        this.log(event);
         return event;
     }
     /**
-     * Read audit log (exportable but never editable)
+     * Read audit log from SQLite (Phase 2)
      */
     read(projectId, limit = 100) {
-        if (!fs_1.default.existsSync(this.logPath)) {
-            return [];
+        if (!this.dbInitialized) {
+            (0, database_1.initDatabase)();
+            this.dbInitialized = true;
         }
-        const content = fs_1.default.readFileSync(this.logPath, 'utf8');
-        const lines = content.split('\n').filter(Boolean);
-        const events = [];
-        for (const line of lines) {
-            try {
-                const event = JSON.parse(line);
-                if (!projectId || event.projectId === projectId) {
-                    events.push(event);
-                }
-            }
-            catch {
-                // Skip corrupted lines
-            }
+        if (projectId) {
+            return database_1.auditDb.getByProject(projectId, limit);
         }
-        // Sort by date descending, take limit
-        return events
-            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-            .slice(0, limit);
+        return database_1.auditDb.getRecent(limit);
     }
     /**
      * Export full audit log

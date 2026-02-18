@@ -4,7 +4,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.projectsRouter = void 0;
-exports.getProjectById = getProjectById;
 // Projects management
 const express_1 = require("express");
 const fs_1 = __importDefault(require("fs"));
@@ -81,7 +80,7 @@ router.post('/', (req, res) => {
     };
     projects_1.projects.set(id, project);
     // Audit log
-    audit_1.audit.log(id, 'system', 'PROJECT_CREATE', { name }, 'daemon');
+    audit_1.audit.logLegacy(id, 'system', 'PROJECT_CREATE', { name }, 'daemon');
     res.status(201).json(project);
 });
 // POST /projects/:id/open - Open/switch to project
@@ -93,7 +92,7 @@ router.post('/:id/open', (req, res) => {
         return;
     }
     project.lastOpenedAt = new Date().toISOString();
-    audit_1.audit.log(id, 'user', 'PROJECT_OPEN', {}, req.session?.clientId);
+    audit_1.audit.logLegacy(id, 'user', 'PROJECT_OPEN', {}, req.session?.clientId);
     res.json(project);
 });
 // GET /projects/:id/settings - Get project settings
@@ -120,14 +119,14 @@ router.put('/:id/settings', (req, res) => {
         // Log capability changes for audit
         const oldCaps = project.settings.capabilities;
         const newCaps = { ...oldCaps, ...capabilities };
-        audit_1.audit.log(id, 'user', 'SETTINGS_CHANGE', {
+        audit_1.audit.logLegacy(id, 'user', 'SETTINGS_CHANGE', {
             oldCapabilities: oldCaps,
             newCapabilities: newCaps,
         }, req.session?.clientId);
         project.settings.capabilities = newCaps;
     }
     if (typeof safeMode === 'boolean') {
-        audit_1.audit.log(id, 'user', 'SAFE_MODE_CHANGE', {
+        audit_1.audit.logLegacy(id, 'user', 'SAFE_MODE_CHANGE', {
             old: project.settings.safeMode,
             new: safeMode,
         }, req.session?.clientId);

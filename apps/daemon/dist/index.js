@@ -1,6 +1,6 @@
 "use strict";
-// AgentX Daemon - Phase 0 Implementation
-// Core daemon with auth, sandbox, audit, and supervisor
+// AgentX Daemon - Phase 2 Implementation
+// Core daemon with auth, sandbox, audit, supervisor + SQLite persistence, locks, git
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -18,6 +18,7 @@ const auth_1 = require("./auth");
 const sandbox_1 = require("./sandbox");
 const audit_1 = require("./audit");
 const supervisor_1 = require("./supervisor");
+const database_1 = require("./database");
 const auth_2 = require("./middleware/auth");
 const health_1 = require("./routes/health");
 const auth_3 = require("./routes/auth");
@@ -25,6 +26,8 @@ const projects_1 = require("./routes/projects");
 const filesystem_1 = require("./routes/filesystem");
 const audit_2 = require("./routes/audit");
 const supervisor_2 = require("./routes/supervisor");
+const locks_1 = require("./routes/locks");
+const git_1 = require("./routes/git");
 const app = (0, express_1.default)();
 exports.app = app;
 // Security middleware
@@ -66,6 +69,8 @@ app.use('/projects', auth_2.authMiddleware, projects_1.projectsRouter);
 app.use('/fs', auth_2.authMiddleware, filesystem_1.fsRouter);
 app.use('/audit', auth_2.authMiddleware, audit_2.auditRouter);
 app.use('/supervisor', auth_2.authMiddleware, supervisor_2.supervisorRouter);
+app.use('/locks', auth_2.authMiddleware, locks_1.locksRouter);
+app.use('/git', auth_2.authMiddleware, git_1.gitRouter);
 // Error handler
 app.use((err, req, res, next) => {
     console.error('Error:', err);
@@ -76,7 +81,7 @@ app.use((err, req, res, next) => {
 });
 // Initialize and start
 async function main() {
-    console.log('🔧 AgentX Daemon - Phase 0');
+    console.log('🔧 AgentX Daemon - Phase 2');
     // Initialize config first (includes port discovery)
     await (0, config_1.initializeConfig)();
     console.log(`Sandbox root: ${config_1.config.sandboxRoot}`);
@@ -85,6 +90,9 @@ async function main() {
     await sandbox_1.sandbox.initialize();
     await audit_1.audit.initialize();
     await supervisor_1.supervisor.initialize();
+    // Initialize SQLite database (Phase 2)
+    (0, database_1.initDatabase)();
+    console.log('💾 SQLite persistence initialized');
     // Write runtime config for UI discovery
     // Schema versioned for backward compatibility
     const runtimeConfig = {
@@ -121,11 +129,13 @@ process.on('SIGINT', async () => {
     console.log('\n🛑 Received SIGINT, shutting down...');
     await supervisor_1.supervisor.shutdown();
     audit_1.audit.shutdown();
+    (0, database_1.closeDatabase)();
     process.exit(0);
 });
 process.on('SIGTERM', async () => {
     console.log('\n🛑 Received SIGTERM, shutting down...');
     await supervisor_1.supervisor.shutdown();
     audit_1.audit.shutdown();
+    (0, database_1.closeDatabase)();
     process.exit(0);
 });

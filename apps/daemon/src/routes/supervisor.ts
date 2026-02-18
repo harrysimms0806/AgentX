@@ -24,7 +24,7 @@ router.post('/runs', (req, res) => {
 
   const run = supervisor.createRun(projectId, type, clientId, timeoutMs);
 
-  audit.log(projectId, 'user', 'RUN_CREATE', { runId: run.id, type, timeoutMs }, clientId);
+  audit.logLegacy(projectId, 'user', 'RUN_CREATE', { runId: run.id, type, timeoutMs }, clientId);
 
   res.status(201).json(run);
 });
@@ -75,7 +75,7 @@ router.post('/runs/:id/spawn', async (req, res) => {
   const cwd = pathResult.path;
 
   // Audit the spawn
-  audit.log(run.projectId, 'user', 'RUN_SPAWN', { runId: id, cmd, args }, clientId);
+  audit.logLegacy(run.projectId, 'user', 'RUN_SPAWN', { runId: id, cmd, args }, clientId);
 
   // Spawn the command
   try {
@@ -135,7 +135,7 @@ router.post('/runs/:id/kill', async (req, res) => {
   const success = await supervisor.killRun(id, reason);
 
   if (success) {
-    audit.log(run.projectId, 'user', 'RUN_KILL', { runId: id, reason }, clientId);
+    audit.logLegacy(run.projectId, 'user', 'RUN_KILL', { runId: id, reason }, clientId);
     res.json({ success: true, message: 'Kill signal sent' });
   } else {
     res.status(500).json({ error: 'Failed to kill run' });
@@ -151,7 +151,7 @@ router.post('/cleanup', (req, res) => {
   const cleaned = supervisor.cleanupRuns(projectId, maxAgeMs);
 
   if (cleaned > 0) {
-    audit.log(projectId || 'system', 'user', 'SUPERVISOR_CLEANUP', { cleanedRuns: cleaned }, clientId);
+    audit.logLegacy(projectId || 'system', 'user', 'SUPERVISOR_CLEANUP', { cleanedRuns: cleaned }, clientId);
   }
 
   res.json({ success: true, cleanedRuns: cleaned });

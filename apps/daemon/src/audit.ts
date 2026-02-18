@@ -2,11 +2,13 @@
 import fs from 'fs';
 import { randomUUID } from 'crypto';
 import { AuditEvent } from '@agentx/api-types';
+import { auditDb, initDatabase } from './database';
 
 class Audit {
   private logPath: string = '';
   private buffer: string[] = [];
   private flushInterval: NodeJS.Timeout | null = null;
+  private dbInitialized = false;
   
   // Sensitive keys that should be redacted from logs
   private sensitiveKeys: string[] = [
@@ -32,7 +34,7 @@ class Audit {
     const { config } = await import('./config');
     this.logPath = config.auditLogPath;
     
-    // Ensure log file exists
+    // Ensure log file exists (keep for backward compatibility)
     if (!fs.existsSync(this.logPath)) {
       fs.writeFileSync(this.logPath, '');
     }
@@ -70,9 +72,29 @@ class Audit {
 
   /**
    * Append an audit event
-   * This is the ONLY way to write to the audit log
+   * Phase 2: Dual-write to JSONL (backup) and SQLite (query)
    */
-  log(
+  async log(event: AuditEvent): Promise<AuditEvent> {
+    // Ensure DB is initialized
+    if (!this.dbInitialized) {
+      initDatabase();
+      this.dbInitialized = true;
+    }
+    
+    // Write to SQLite for querying
+    auditDb.append(event);
+    
+    // Also write to JSONL for backup/export compatibility
+    this.buffer.push(JSON.stringify(event));
+    this.flush();
+
+    return event;
+  }
+  
+  /**
+   * Legacy log method for backward compatibility
+   */
+  logLegacy(
     projectId: string,
     actorType: 'user' | 'agent' | 'system',
     actionType: string,
@@ -92,42 +114,23 @@ class Audit {
       createdAt: new Date().toISOString(),
     };
 
-    // Add to buffer for batch writing
-    this.buffer.push(JSON.stringify(event));
-
-    // Flush immediately for privileged actions to reduce loss window
-    this.flush();
-
+    this.log(event);
     return event;
   }
 
   /**
-   * Read audit log (exportable but never editable)
+   * Read audit log from SQLite (Phase 2)
    */
   read(projectId?: string, limit: number = 100): AuditEvent[] {
-    if (!fs.existsSync(this.logPath)) {
-      return [];
+    if (!this.dbInitialized) {
+      initDatabase();
+      this.dbInitialized = true;
     }
-
-    const content = fs.readFileSync(this.logPath, 'utf8');
-    const lines = content.split('\n').filter(Boolean);
     
-    const events: AuditEvent[] = [];
-    for (const line of lines) {
-      try {
-        const event = JSON.parse(line) as AuditEvent;
-        if (!projectId || event.projectId === projectId) {
-          events.push(event);
-        }
-      } catch {
-        // Skip corrupted lines
-      }
+    if (projectId) {
+      return auditDb.getByProject(projectId, limit);
     }
-
-    // Sort by date descending, take limit
-    return events
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .slice(0, limit);
+    return auditDb.getRecent(limit);
   }
 
   /**

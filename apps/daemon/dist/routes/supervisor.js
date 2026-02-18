@@ -22,7 +22,7 @@ router.post('/runs', (req, res) => {
         return;
     }
     const run = supervisor_1.supervisor.createRun(projectId, type, clientId, timeoutMs);
-    audit_1.audit.log(projectId, 'user', 'RUN_CREATE', { runId: run.id, type, timeoutMs }, clientId);
+    audit_1.audit.logLegacy(projectId, 'user', 'RUN_CREATE', { runId: run.id, type, timeoutMs }, clientId);
     res.status(201).json(run);
 });
 // POST /supervisor/runs/:id/spawn - Spawn a command in the run
@@ -63,7 +63,7 @@ router.post('/runs/:id/spawn', async (req, res) => {
     }
     const cwd = pathResult.path;
     // Audit the spawn
-    audit_1.audit.log(run.projectId, 'user', 'RUN_SPAWN', { runId: id, cmd, args }, clientId);
+    audit_1.audit.logLegacy(run.projectId, 'user', 'RUN_SPAWN', { runId: id, cmd, args }, clientId);
     // Spawn the command
     try {
         await supervisor_1.supervisor.spawnCommand(id, cmd, args, cwd, env);
@@ -112,7 +112,7 @@ router.post('/runs/:id/kill', async (req, res) => {
     }
     const success = await supervisor_1.supervisor.killRun(id, reason);
     if (success) {
-        audit_1.audit.log(run.projectId, 'user', 'RUN_KILL', { runId: id, reason }, clientId);
+        audit_1.audit.logLegacy(run.projectId, 'user', 'RUN_KILL', { runId: id, reason }, clientId);
         res.json({ success: true, message: 'Kill signal sent' });
     }
     else {
@@ -126,7 +126,7 @@ router.post('/cleanup', (req, res) => {
     const maxAgeMs = maxAgeHours ? maxAgeHours * 60 * 60 * 1000 : undefined;
     const cleaned = supervisor_1.supervisor.cleanupRuns(projectId, maxAgeMs);
     if (cleaned > 0) {
-        audit_1.audit.log(projectId || 'system', 'user', 'SUPERVISOR_CLEANUP', { cleanedRuns: cleaned }, clientId);
+        audit_1.audit.logLegacy(projectId || 'system', 'user', 'SUPERVISOR_CLEANUP', { cleanedRuns: cleaned }, clientId);
     }
     res.json({ success: true, cleanedRuns: cleaned });
 });
