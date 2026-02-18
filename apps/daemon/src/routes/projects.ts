@@ -96,7 +96,7 @@ router.post('/', (req, res) => {
   projects.set(id, project);
   
   // Audit log
-  audit.log(id, 'system', 'PROJECT_CREATE', { name }, 'daemon');
+  audit.logLegacy(id, 'system', 'PROJECT_CREATE', { name }, 'daemon');
 
   res.status(201).json(project);
 });
@@ -113,7 +113,7 @@ router.post('/:id/open', (req, res) => {
 
   project.lastOpenedAt = new Date().toISOString();
   
-  audit.log(id, 'user', 'PROJECT_OPEN', {}, (req as any).session?.clientId);
+  audit.logLegacy(id, 'user', 'PROJECT_OPEN', {}, (req as any).session?.clientId);
   
   res.json(project);
 });
@@ -149,7 +149,7 @@ router.put('/:id/settings', (req, res) => {
     const oldCaps = project.settings.capabilities;
     const newCaps = { ...oldCaps, ...capabilities };
     
-    audit.log(id, 'user', 'SETTINGS_CHANGE', {
+    audit.logLegacy(id, 'user', 'SETTINGS_CHANGE', {
       oldCapabilities: oldCaps,
       newCapabilities: newCaps,
     }, (req as any).session?.clientId);
@@ -158,7 +158,7 @@ router.put('/:id/settings', (req, res) => {
   }
 
   if (typeof safeMode === 'boolean') {
-    audit.log(id, 'user', 'SAFE_MODE_CHANGE', {
+    audit.logLegacy(id, 'user', 'SAFE_MODE_CHANGE', {
       old: project.settings.safeMode,
       new: safeMode,
     }, (req as any).session?.clientId);

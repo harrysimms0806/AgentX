@@ -17,7 +17,7 @@ router.post('/session', (req, res) => {
   const session = auth.createSession(clientId);
 
   // Audit: session created (redacted token)
-  audit.log('system', 'system', 'AUTH_SESSION_CREATE', { clientId, tokenPrefix: session.token.slice(0, 8) + '...' }, 'daemon');
+  audit.logLegacy('system', 'system', 'AUTH_SESSION_CREATE', { clientId, tokenPrefix: session.token.slice(0, 8) + '...' }, 'daemon');
 
   res.json({
     token: session.token,
@@ -45,7 +45,7 @@ protectedRouter.post('/revoke', (req, res) => {
 
   if (revoked) {
     // Audit: session revoked
-    audit.log('system', 'user', 'AUTH_SESSION_REVOKE', { clientId, tokenPrefix: token.slice(0, 8) + '...' }, clientId);
+    audit.logLegacy('system', 'user', 'AUTH_SESSION_REVOKE', { clientId, tokenPrefix: token.slice(0, 8) + '...' }, clientId);
     res.json({ status: 'revoked' });
   } else {
     res.status(404).json({ error: 'Session not found' });

@@ -3,6 +3,7 @@ declare class Audit {
     private logPath;
     private buffer;
     private flushInterval;
+    private dbInitialized;
     private sensitiveKeys;
     initialize(): Promise<void>;
     /**
@@ -11,11 +12,15 @@ declare class Audit {
     private redactPayload;
     /**
      * Append an audit event
-     * This is the ONLY way to write to the audit log
+     * Phase 2: Dual-write to JSONL (backup) and SQLite (query)
      */
-    log(projectId: string, actorType: 'user' | 'agent' | 'system', actionType: string, payload: Record<string, unknown>, actorId?: string): AuditEvent;
+    log(event: AuditEvent): Promise<AuditEvent>;
     /**
-     * Read audit log (exportable but never editable)
+     * Legacy log method for backward compatibility
+     */
+    logLegacy(projectId: string, actorType: 'user' | 'agent' | 'system', actionType: string, payload: Record<string, unknown>, actorId?: string): AuditEvent;
+    /**
+     * Read audit log from SQLite (Phase 2)
      */
     read(projectId?: string, limit?: number): AuditEvent[];
     /**

@@ -99,7 +99,7 @@ router.get('/read', (req, res) => {
             return;
         }
         const content = fs_1.default.readFileSync(check.realPath, 'utf8');
-        audit_1.audit.log(projectId, 'user', 'FILE_READ', { path: filePath }, req.session?.clientId);
+        audit_1.audit.logLegacy(projectId, 'user', 'FILE_READ', { path: filePath }, req.session?.clientId);
         res.json({ content });
     }
     catch (err) {
@@ -131,7 +131,7 @@ router.put('/write', (req, res) => {
             fs_1.default.mkdirSync(parentDir, { recursive: true });
         }
         fs_1.default.writeFileSync(check.realPath, content, 'utf8');
-        audit_1.audit.log(projectId, 'user', 'FILE_WRITE', { path: filePath, size: content.length }, req.session?.clientId);
+        audit_1.audit.logLegacy(projectId, 'user', 'FILE_WRITE', { path: filePath, size: content.length }, req.session?.clientId);
         res.json({ success: true, path: filePath });
     }
     catch (err) {
@@ -155,7 +155,7 @@ router.post('/delete', (req, res) => {
         res.status(403).json({ error: result.error });
         return;
     }
-    audit_1.audit.log(projectId, 'user', 'FILE_DELETE', { path: filePath, trashPath: result.realPath }, req.session?.clientId);
+    audit_1.audit.logLegacy(projectId, 'user', 'FILE_DELETE', { path: filePath, trashPath: result.realPath }, req.session?.clientId);
     res.json({ success: true, trashPath: result.realPath });
 });
 // POST /fs/rename - Rename file
@@ -182,7 +182,7 @@ router.post('/rename', (req, res) => {
     }
     try {
         fs_1.default.renameSync(oldCheck.realPath, newCheck.realPath);
-        audit_1.audit.log(projectId, 'user', 'FILE_RENAME', { oldPath, newPath }, req.session?.clientId);
+        audit_1.audit.logLegacy(projectId, 'user', 'FILE_RENAME', { oldPath, newPath }, req.session?.clientId);
         res.json({ success: true });
     }
     catch (err) {

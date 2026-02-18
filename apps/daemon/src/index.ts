@@ -1,5 +1,5 @@
-// AgentX Daemon - Phase 0 Implementation
-// Core daemon with auth, sandbox, audit, and supervisor
+// AgentX Daemon - Phase 2 Implementation
+// Core daemon with auth, sandbox, audit, supervisor + SQLite persistence, locks
 
 import express from 'express';
 import cors from 'cors';
@@ -15,6 +15,7 @@ import { auth } from './auth';
 import { sandbox } from './sandbox';
 import { audit } from './audit';
 import { supervisor } from './supervisor';
+import { initDatabase, closeDatabase } from './database';
 import { authMiddleware } from './middleware/auth';
 import { healthRouter } from './routes/health';
 import { authPublicRouter, authProtectedRouter } from './routes/auth';
@@ -22,6 +23,7 @@ import { projectsRouter } from './routes/projects';
 import { fsRouter } from './routes/filesystem';
 import { auditRouter } from './routes/audit';
 import { supervisorRouter } from './routes/supervisor';
+import { locksRouter } from './routes/locks';
 
 const app = express();
 
@@ -68,6 +70,7 @@ app.use('/projects', authMiddleware, projectsRouter);
 app.use('/fs', authMiddleware, fsRouter);
 app.use('/audit', authMiddleware, auditRouter);
 app.use('/supervisor', authMiddleware, supervisorRouter);
+app.use('/locks', authMiddleware, locksRouter);
 
 // Error handler
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -80,7 +83,7 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
 
 // Initialize and start
 async function main() {
-  console.log('🔧 AgentX Daemon - Phase 0');
+  console.log('🔧 AgentX Daemon - Phase 2');
   
   // Initialize config first (includes port discovery)
   await initializeConfig();
@@ -92,6 +95,10 @@ async function main() {
   await sandbox.initialize();
   await audit.initialize();
   await supervisor.initialize();
+  
+  // Initialize SQLite database (Phase 2)
+  initDatabase();
+  console.log('💾 SQLite persistence initialized');
   
   // Write runtime config for UI discovery
   // Schema versioned for backward compatibility
@@ -138,6 +145,7 @@ process.on('SIGINT', async () => {
   console.log('\n🛑 Received SIGINT, shutting down...');
   await supervisor.shutdown();
   audit.shutdown();
+  closeDatabase();
   process.exit(0);
 });
 
@@ -145,6 +153,7 @@ process.on('SIGTERM', async () => {
   console.log('\n🛑 Received SIGTERM, shutting down...');
   await supervisor.shutdown();
   audit.shutdown();
+  closeDatabase();
   process.exit(0);
 });
 
