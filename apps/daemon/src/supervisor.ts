@@ -25,6 +25,22 @@ class Supervisor {
   private runsFile: string = '';
   private rotationInterval: NodeJS.Timeout | null = null;
 
+  private toPublicRun(run: RunRecord): Run {
+    return {
+      id: run.id,
+      projectId: run.projectId,
+      type: run.type,
+      ownerAgentId: run.ownerAgentId,
+      status: run.status,
+      pid: run.pid,
+      startedAt: run.startedAt,
+      endedAt: run.endedAt,
+      exitCode: run.exitCode,
+      logsPath: run.logsPath,
+      summary: run.summary,
+    };
+  }
+
   async initialize(): Promise<void> {
     const { config } = await import('./config');
     this.logsDir = path.join(config.runtimeDir, 'logs');
@@ -237,7 +253,10 @@ class Supervisor {
     });
 
     child.on('close', (code) => {
-      run.status = code === 0 ? 'completed' : 'error';
+      // Preserve terminal states that may have been set by explicit kill/timeout handling
+      if (run.status !== 'killed') {
+        run.status = code === 0 ? 'completed' : 'error';
+      }
       run.exitCode = code ?? undefined;
       run.endedAt = new Date().toISOString();
       run.logStream?.end();
@@ -315,57 +334,12 @@ class Supervisor {
   }
 
   /**
-   * List runs with optional project filter
-   */
-  listRuns(projectId?: string): Run[] {
-    return Array.from(this.runs.values())
-      .filter(r => !projectId || r.projectId === projectId)
-      .map(r => ({
-        id: r.id,
-        projectId: r.projectId,
-        type: r.type,
-        ownerAgentId: r.ownerAgentId,
-        status: r.status,
-        pid: r.pid,
-        startedAt: r.startedAt,
-        endedAt: r.endedAt,
-        exitCode: r.exitCode,
-        logsPath: r.logsPath,
-        summary: r.summary,
-      }));
-  }
-
-  /**
-   * Cleanup stale completed runs older than maxAgeMs
-   */
-  cleanupRuns(projectId?: string, maxAgeMs: number = 24 * 60 * 60 * 1000): number {
-    const now = Date.now();
-    let cleaned = 0;
-
-    for (const run of Array.from(this.runs.values())) {
-      if (!run.endedAt || run.status === 'running') continue;
-      if (projectId && run.projectId !== projectId) continue;
-
-      const age = now - new Date(run.endedAt).getTime();
-      if (age > maxAgeMs) {
-        this.runs.delete(run.id);
-        cleaned++;
-      }
-    }
-
-    if (cleaned > 0) {
-      this.persistRuns();
-    }
-
-    return cleaned;
-  }
-
-
-  /**
    * Get run status
    */
   getRun(runId: string): Run | undefined {
-    return this.runs.get(runId);
+    const run = this.runs.get(runId);
+    if (!run) return undefined;
+    return this.toPublicRun(run);
   }
 
   /**
@@ -374,18 +348,7 @@ class Supervisor {
   getProjectRuns(projectId: string): Run[] {
     return Array.from(this.runs.values())
       .filter(r => r.projectId === projectId)
-      .map(r => ({
-        id: r.id,
-        projectId: r.projectId,
-        type: r.type,
-        ownerAgentId: r.ownerAgentId,
-        status: r.status,
-        startedAt: r.startedAt,
-        endedAt: r.endedAt,
-        exitCode: r.exitCode,
-        logsPath: r.logsPath,
-        summary: r.summary,
-      }));
+      .map(r => this.toPublicRun(r));
   }
 
   /**
@@ -491,20 +454,7 @@ class Supervisor {
     if (projectId) {
       runs = runs.filter(r => r.projectId === projectId);
     }
-    return runs.map(r => ({
-      id: r.id,
-      projectId: r.projectId,
-      type: r.type,
-      ownerAgentId: r.ownerAgentId,
-      status: r.status,
-      pid: r.pid,
-      timeoutMs: r.timeoutMs,
-      startedAt: r.startedAt,
-      endedAt: r.endedAt,
-      exitCode: r.exitCode,
-      logsPath: r.logsPath,
-      summary: r.summary,
-    }));
+    return runs.map(r => this.toPublicRun(r));
   }
 
   /**

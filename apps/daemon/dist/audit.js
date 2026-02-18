@@ -170,11 +170,3 @@ class Audit {
 exports.audit = new Audit();
 // Ensure flush on exit
 process.on('exit', () => exports.audit.shutdown());
-process.on('SIGINT', () => {
-    exports.audit.shutdown();
-    process.exit(0);
-});
-process.on('SIGTERM', () => {
-    exports.audit.shutdown();
-    process.exit(0);
-});

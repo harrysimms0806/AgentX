@@ -161,11 +161,3 @@ export const audit = new Audit();
 
 // Ensure flush on exit
 process.on('exit', () => audit.shutdown());
-process.on('SIGINT', () => {
-  audit.shutdown();
-  process.exit(0);
-});
-process.on('SIGTERM', () => {
-  audit.shutdown();
-  process.exit(0);
-});
