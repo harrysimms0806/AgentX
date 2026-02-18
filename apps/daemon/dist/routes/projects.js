@@ -50,13 +50,16 @@ router.post('/', (req, res) => {
     // Create sandbox directory
     const createResult = sandbox_1.sandbox.createProject(id);
     if (!createResult.success) {
-        res.status(500).json({ error: createResult.error || 'Failed to create project directory' });
+        // Return 400 for validation errors, 403 for sandbox violations
+        const statusCode = createResult.error?.includes('Invalid') ? 400 : 403;
+        res.status(statusCode).json({ error: createResult.error || 'Failed to create project directory' });
         return;
     }
     // Get project path
     const pathResult = sandbox_1.sandbox.getProjectPath(id);
     if (!pathResult.allowed) {
-        res.status(500).json({ error: pathResult.error || 'Failed to get project path' });
+        const statusCode = pathResult.error?.includes('Invalid') ? 400 : 403;
+        res.status(statusCode).json({ error: pathResult.error || 'Failed to get project path' });
         return;
     }
     // Create project structure

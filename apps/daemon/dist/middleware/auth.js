@@ -3,11 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.authMiddleware = authMiddleware;
 const auth_1 = require("../auth");
 function authMiddleware(req, res, next) {
-    // Allow health checks without auth
-    if (req.path === '/health') {
-        next();
-        return;
-    }
+    // Note: Public routes (/health, /auth/session) are mounted WITHOUT this middleware
+    // This middleware enforces Bearer token auth for ALL routes that use it
     const authHeader = req.headers.authorization;
     if (!authHeader) {
         res.status(401).json({ error: 'Authorization header required' });

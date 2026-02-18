@@ -45,15 +45,21 @@ app.use((0, cors_1.default)({
     credentials: true,
 }));
 app.use(express_1.default.json({ limit: '10mb' }));
-// PUBLIC ROUTE ALLOWLIST
-// These are the ONLY routes that do not require Bearer token authentication
-// - /health - Health check for monitoring
-// - /auth/session - Create new session (must be public to obtain token)
-// ALL other routes require valid Bearer token via authMiddleware
-const PUBLIC_ROUTES = ['/health', '/auth/session'];
-// Routes - /health is the ONLY public endpoint (per Phase 0 requirements)
+// AUTH POLICY
+// HTTP Routes: Explicit public routes mounted without authMiddleware:
+// - /health - Health check (no auth required)
+// - /auth/session - Create session (must be public to obtain token)
+// ALL other HTTP routes require Bearer token via authMiddleware
+//
+// WebSocket Policy (for future Phase 3+):
+// - WS connections must perform auth handshake on connect
+// - Reject connection if valid Bearer token not provided in subprotocol/header
+// - Use same authMiddleware logic adapted for WS upgrade
+// - Audit all WS connections like HTTP requests
+// Routes - public endpoints mounted WITHOUT authMiddleware
 app.use('/health', health_1.healthRouter);
 app.use('/auth', auth_3.authPublicRouter); // /auth/session - public
+// Routes - protected endpoints mounted WITH authMiddleware
 app.use('/auth', auth_2.authMiddleware, auth_3.authProtectedRouter); // /auth/revoke - protected
 app.use('/projects', auth_2.authMiddleware, projects_1.projectsRouter);
 app.use('/fs', auth_2.authMiddleware, filesystem_1.fsRouter);
