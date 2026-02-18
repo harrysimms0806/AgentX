@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { supervisor } from '../supervisor';
 import { audit } from '../audit';
 import { sandbox } from '../sandbox';
+import { projects } from '../store/projects';
 
 const router = Router();
 
@@ -28,56 +29,67 @@ router.post('/runs', (req, res) => {
   res.status(201).json(run);
 });
 
-// POST /supervisor/runs/:id/start - Start command run (Phase 0 guarded execution)
-router.post('/runs/:id/start', async (req, res) => {
+// POST /supervisor/runs/:id/spawn - Spawn a command in the run
+router.post('/runs/:id/spawn', async (req, res) => {
   const { id } = req.params;
-  const { cmd, args = [], projectId, cwd = '.' } = req.body;
+  const { cmd, args, env } = req.body;
   const clientId = (req as any).session?.clientId || 'unknown';
 
-  if (!projectId || !cmd || !Array.isArray(args)) {
-    res.status(400).json({ error: 'projectId, cmd, and args[] required' });
+  // Validate inputs
+  if (!cmd || typeof cmd !== 'string') {
+    res.status(400).json({ error: 'cmd required (string)' });
     return;
   }
 
+  if (!Array.isArray(args)) {
+    res.status(400).json({ error: 'args must be an array' });
+    return;
+  }
+
+  // Get the run
   const run = supervisor.getRun(id);
   if (!run) {
     res.status(404).json({ error: 'Run not found' });
     return;
   }
 
-  if (run.projectId !== projectId) {
-    res.status(400).json({ error: 'Run projectId mismatch' });
+  // Check project exists and has EXEC_SHELL capability
+  const project = projects.get(run.projectId);
+  if (!project) {
+    res.status(404).json({ error: 'Project not found' });
     return;
   }
 
-  if (run.status !== 'pending') {
-    res.status(400).json({ error: 'Run is not pending' });
+  if (!project.settings.capabilities.EXEC_SHELL) {
+    res.status(403).json({ error: 'EXEC_SHELL capability not enabled for this project' });
     return;
   }
 
-  const cwdCheck = sandbox.validatePath(projectId, cwd);
-  if (!cwdCheck.allowed) {
-    res.status(403).json({ error: cwdCheck.error || 'Invalid cwd' });
+  // Get sandboxed cwd
+  const pathResult = sandbox.getProjectPath(run.projectId);
+  if (!pathResult.allowed) {
+    res.status(403).json({ error: pathResult.error || 'Invalid project path' });
     return;
   }
 
-  const allowedCommands = new Set(['node', 'npm', 'bash', 'sh', 'python', 'python3']);
-  if (!allowedCommands.has(cmd)) {
-    res.status(403).json({ error: `Command not allowed in Phase 0: ${cmd}` });
-    return;
+  const cwd = pathResult.path;
+
+  // Audit the spawn
+  audit.log(run.projectId, 'user', 'RUN_SPAWN', { runId: id, cmd, args }, clientId);
+
+  // Spawn the command
+  try {
+    await supervisor.spawnCommand(id, cmd, args, cwd, env);
+    res.json({ success: true, message: 'Command spawned', runId: id });
+  } catch (err: any) {
+    res.status(500).json({ error: `Failed to spawn: ${err.message}` });
   }
-
-  await supervisor.spawnCommand(id, cmd, args, cwdCheck.realPath!);
-
-  audit.log(projectId, 'user', 'RUN_START', { runId: id, cmd, args, cwd }, clientId);
-
-  res.json({ success: true, runId: id });
 });
 
 // GET /supervisor/runs - List all runs
 router.get('/runs', (req, res) => {
-  const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
-  const runs = supervisor.listRuns(projectId);
+  const { projectId } = req.query;
+  const runs = supervisor.listRuns(projectId as string | undefined);
   res.json({ runs });
 });
 
@@ -132,10 +144,11 @@ router.post('/runs/:id/kill', async (req, res) => {
 
 // POST /supervisor/cleanup - Clean up stale/orphaned runs
 router.post('/cleanup', (req, res) => {
-  const { projectId } = req.body;
+  const { projectId, maxAgeHours } = req.body;
   const clientId = (req as any).session?.clientId || 'unknown';
-
-  const cleaned = supervisor.cleanupRuns(projectId);
+  
+  const maxAgeMs = maxAgeHours ? maxAgeHours * 60 * 60 * 1000 : undefined;
+  const cleaned = supervisor.cleanupRuns(projectId, maxAgeMs);
 
   if (cleaned > 0) {
     audit.log(projectId || 'system', 'user', 'SUPERVISOR_CLEANUP', { cleanedRuns: cleaned }, clientId);

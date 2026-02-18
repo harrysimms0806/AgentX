@@ -4,26 +4,35 @@ import fs from 'fs';
 import path from 'path';
 import { sandbox } from '../sandbox';
 import { audit } from '../audit';
-import { getProjectById } from './projects';
+import { projects } from '../store/projects';
 import { FileNode } from '@agentx/api-types';
 
 const router = Router();
 
 // Helper to check write capabilities
 function canWrite(req: any, projectId: string): { allowed: boolean; error?: string } {
-  const project = getProjectById(projectId);
+  const project = projects.get(projectId);
+  
   if (!project) {
     return { allowed: false, error: 'Project not found' };
   }
-
+  
+  // Check safeMode - if enabled, no writes allowed
   if (project.settings.safeMode) {
-    return { allowed: false, error: 'FS_WRITE disabled by policy (safeMode enabled)' };
+    return { 
+      allowed: false, 
+      error: 'Write denied: project is in safe mode. Disable safeMode to enable writes.' 
+    };
   }
-
+  
+  // Check FS_WRITE capability
   if (!project.settings.capabilities.FS_WRITE) {
-    return { allowed: false, error: 'FS_WRITE disabled by capability policy' };
+    return { 
+      allowed: false, 
+      error: 'Write denied: FS_WRITE capability not enabled for this project.' 
+    };
   }
-
+  
   return { allowed: true };
 }
 
