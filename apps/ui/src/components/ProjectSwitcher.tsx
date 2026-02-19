@@ -5,55 +5,20 @@ interface ProjectSwitcherProps {
 }
 
 export default function ProjectSwitcher({ collapsed }: ProjectSwitcherProps) {
+  if (collapsed) return null;
+
   return (
     <div className="project-switcher">
-      {!collapsed && (
-        <>
-          <div className="section-title">Projects</div>
-          <button className="project-btn">
-            <span className="project-icon">+</span>
-            <span>New Project</span>
-          </button>
-        </>
-      )}
-      
+      <div className="section-title">PROJECTS</div>
+      <button className="project-btn">+ New Project</button>
       <style jsx>{`
-        .project-switcher {
-          padding: var(--space-md);
-          border-bottom: 1px solid var(--border);
-        }
-        
-        .section-title {
-          font-size: 11px;
-          font-weight: 600;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          color: var(--text-tertiary);
-          margin-bottom: var(--space-sm);
-        }
-        
+        .project-switcher { padding: 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+        .section-title { font-size: 13px; font-weight: 500; color: var(--text-tertiary); margin-bottom: 8px; }
         .project-btn {
-          width: 100%;
-          display: flex;
-          align-items: center;
-          gap: var(--space-sm);
-          padding: var(--space-sm);
-          background: transparent;
-          border: 1px dashed var(--border);
-          border-radius: var(--radius-sm);
-          color: var(--text-secondary);
-          cursor: pointer;
-          transition: all 0.15s ease;
+          width: 100%; height: 32px; background: var(--bg-tertiary); border: none; border-radius: 8px;
+          color: var(--text-secondary); text-align: left; padding: 0 10px; cursor: pointer;
         }
-        
-        .project-btn:hover {
-          border-color: var(--accent);
-          color: var(--accent);
-        }
-        
-        .project-icon {
-          font-size: 14px;
-        }
+        .project-btn:hover { background: rgba(255, 255, 255, 0.08); }
       `}</style>
     </div>
   );
