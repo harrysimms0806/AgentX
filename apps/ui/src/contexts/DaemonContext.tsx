@@ -86,6 +86,7 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
   const terminalProjectScope = 'default';
   const isConnectingRef = useRef(false);
   const mountedRef = useRef(true);
+  const canUpdate = () => mountedRef.current;
 
   // Main connection function
   const tryConnect = async () => {
@@ -93,51 +94,65 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
     isConnectingRef.current = true;
     
     try {
-      setConnectionState('discovering');
-      setStatusMessage('Discovering daemon...');
+      if (canUpdate()) {
+        setConnectionState('discovering');
+        setStatusMessage('Discovering daemon...');
+      }
       
       // Step 1: Discovery
       const discovery = await getDiscovery();
       if (!discovery.ok) {
-        setConnectionState('runtime_missing');
-        setStatusMessage('Daemon not found. Is it running?');
+        if (canUpdate()) {
+          setConnectionState('runtime_missing');
+          setStatusMessage('Daemon not found. Is it running?');
+        }
         return;
       }
       
       if (!mountedRef.current) return;
       
-      setDaemonUrl(discovery.data.daemonUrl);
-      setDaemonPort(discovery.data.daemonPort);
-      setDiscoverySource(discovery.data.source);
+      if (canUpdate()) {
+        setDaemonUrl(discovery.data.daemonUrl);
+        setDaemonPort(discovery.data.daemonPort);
+        setDiscoverySource(discovery.data.source);
+      }
       
       // Step 2: Health check
-      setConnectionState('connecting');
-      setStatusMessage('Checking daemon health...');
+      if (canUpdate()) {
+        setConnectionState('connecting');
+        setStatusMessage('Checking daemon health...');
+      }
       
       const healthResult = await getHealth();
       if (!healthResult.ok) {
-        setConnectionState('offline');
-        setStatusMessage('Daemon unhealthy. Retrying...');
+        if (canUpdate()) {
+          setConnectionState('offline');
+          setStatusMessage('Daemon unhealthy. Retrying...');
+        }
         return;
       }
       
       if (!mountedRef.current) return;
       
-      setHealth(healthResult.data);
-      setLastHealthAt(new Date().toISOString());
+      if (canUpdate()) {
+        setHealth(healthResult.data);
+        setLastHealthAt(new Date().toISOString());
+      }
       
       // Step 3: Get or reuse token
       let sessionToken = globalToken;
       
       if (!sessionToken || Date.now() >= globalTokenExpiry) {
-        setStatusMessage('Creating session...');
+        if (canUpdate()) setStatusMessage('Creating session...');
         const session = await createSessionToken();
         
         if (!session.ok) {
-          setConnectionState('auth_failed');
-          setStatusMessage('Authentication failed');
+          if (canUpdate()) {
+            setConnectionState('auth_failed');
+            setStatusMessage('Authentication failed');
+            setToken(null);
+          }
           globalToken = null;
-          setToken(null);
           return;
         }
         
@@ -148,8 +163,10 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
       
       if (!mountedRef.current) return;
       
-      setToken(sessionToken);
-      setLastAuthAt(new Date().toISOString());
+      if (canUpdate()) {
+        setToken(sessionToken);
+        setLastAuthAt(new Date().toISOString());
+      }
       
       // Step 4: Load terminals
       const terminalResult = await getTerminals(sessionToken, terminalProjectScope);
@@ -172,9 +189,11 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
       if (!mountedRef.current) return;
       
       // Success!
-      setConnectionState('online');
-      setStatusMessage(`Connected on port ${healthResult.data.daemonPort}`);
-      setRetryAttempt(0);
+      if (canUpdate()) {
+        setConnectionState('online');
+        setStatusMessage(`Connected on port ${healthResult.data.daemonPort}`);
+        setRetryAttempt(0);
+      }
       
     } catch (err) {
       if (!mountedRef.current) return;
@@ -201,17 +220,30 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
     
     const interval = setInterval(async () => {
       const healthResult = await getHealth();
+      if (!canUpdate()) return;
       if (healthResult.ok) {
         setHealth(healthResult.data);
         setLastHealthAt(new Date().toISOString());
       } else {
         setConnectionState('offline');
         setStatusMessage('Connection lost. Retrying...');
-        tryConnect();
+        void tryConnect();
       }
     }, 30000);
     
     return () => clearInterval(interval);
+  }, [connectionState]);
+
+
+  // Retry connection while offline/error
+  useEffect(() => {
+    if (connectionState === 'online' || connectionState === 'connecting' || connectionState === 'discovering') return;
+
+    const retryTimer = setTimeout(() => {
+      void tryConnect();
+    }, 5000);
+
+    return () => clearTimeout(retryTimer);
   }, [connectionState]);
 
   const refreshConnection = () => {
