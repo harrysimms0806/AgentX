@@ -12,6 +12,7 @@ const sandbox_1 = require("../sandbox");
 const audit_1 = require("../audit");
 const projects_1 = require("../store/projects");
 const database_1 = require("../database");
+const policy_engine_1 = require("../policy-engine");
 const router = (0, express_1.Router)();
 exports.fsRouter = router;
 const TREE_IGNORES = new Set([
@@ -144,9 +145,9 @@ router.get('/tree', (req, res) => {
         res.status(500).json({ error: `Failed to read directory: ${err}` });
     }
 });
-// GET /fs/read?projectId=&path= - Read file
+// GET /fs/read?projectId=&path=&startLine=&endLine= - Read file (optionally by line range)
 router.get('/read', (req, res) => {
-    const { projectId, path: filePath } = req.query;
+    const { projectId, path: filePath, startLine, endLine } = req.query;
     if (!projectId || !filePath || typeof projectId !== 'string' || typeof filePath !== 'string') {
         res.status(400).json({ error: 'projectId and path required' });
         return;
@@ -176,10 +177,37 @@ router.get('/read', (req, res) => {
             return;
         }
         const content = fs_1.default.readFileSync(check.realPath, 'utf8');
-        if (Math.random() < READ_AUDIT_SAMPLE_RATE) {
-            audit_1.audit.logLegacy(projectId, 'user', 'FILE_READ', { path: filePath, size: stats.size }, actorIdFromReq(req));
+        const lines = content.split(/\r?\n/);
+        const parsedStart = typeof startLine === 'string' ? Number.parseInt(startLine, 10) : undefined;
+        const parsedEnd = typeof endLine === 'string' ? Number.parseInt(endLine, 10) : undefined;
+        if ((parsedStart !== undefined && (!Number.isFinite(parsedStart) || parsedStart < 1)) ||
+            (parsedEnd !== undefined && (!Number.isFinite(parsedEnd) || parsedEnd < 1))) {
+            res.status(400).json({ error: 'startLine/endLine must be positive integers' });
+            return;
         }
-        res.json({ content, size: stats.size });
+        if (parsedStart !== undefined && parsedEnd !== undefined && parsedEnd < parsedStart) {
+            res.status(400).json({ error: 'endLine must be greater than or equal to startLine' });
+            return;
+        }
+        const safeStart = parsedStart ?? 1;
+        const safeEnd = Math.min(lines.length, parsedEnd ?? lines.length);
+        const contentToReturn = lines.slice(safeStart - 1, safeEnd).join('\n');
+        if (Math.random() < READ_AUDIT_SAMPLE_RATE) {
+            audit_1.audit.logLegacy(projectId, 'user', 'FILE_READ', {
+                path: filePath,
+                size: stats.size,
+                startLine: safeStart,
+                endLine: safeEnd,
+            }, actorIdFromReq(req));
+        }
+        res.json({
+            content: contentToReturn,
+            size: stats.size,
+            startLine: safeStart,
+            endLine: safeEnd,
+            totalLines: lines.length,
+            truncated: safeStart !== 1 || safeEnd !== lines.length,
+        });
     }
     catch (err) {
         res.status(500).json({ error: `Failed to read file: ${err}` });
@@ -195,6 +223,12 @@ router.put('/write', (req, res) => {
     const writeCheck = canWrite(projectId);
     if (!writeCheck.allowed) {
         res.status(403).json({ error: writeCheck.error || 'Write not allowed', code: writeCheck.code });
+        return;
+    }
+    const policy = database_1.policyDb.getByProject(projectId) || policy_engine_1.defaultProjectPolicy;
+    const policyCheck = (0, policy_engine_1.checkWritePathPolicy)(policy, filePath);
+    if (!policyCheck.allowed) {
+        res.status(403).json({ error: `Policy blocked: ${policyCheck.reason}`, code: policyCheck.code, requestApproval: policyCheck.requestApproval });
         return;
     }
     const actorId = actorIdFromReq(req);
@@ -231,6 +265,12 @@ router.post('/delete', (req, res) => {
     const writeCheck = canWrite(projectId);
     if (!writeCheck.allowed) {
         res.status(403).json({ error: writeCheck.error || 'Delete not allowed', code: writeCheck.code });
+        return;
+    }
+    const deletePolicy = database_1.policyDb.getByProject(projectId) || policy_engine_1.defaultProjectPolicy;
+    const deletePolicyCheck = (0, policy_engine_1.checkWritePathPolicy)(deletePolicy, filePath);
+    if (!deletePolicyCheck.allowed) {
+        res.status(403).json({ error: `Policy blocked: ${deletePolicyCheck.reason}`, code: deletePolicyCheck.code, requestApproval: deletePolicyCheck.requestApproval });
         return;
     }
     const actorId = actorIdFromReq(req);

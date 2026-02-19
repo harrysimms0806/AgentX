@@ -7,6 +7,8 @@ const supervisor_1 = require("../supervisor");
 const audit_1 = require("../audit");
 const sandbox_1 = require("../sandbox");
 const projects_1 = require("../store/projects");
+const database_1 = require("../database");
+const policy_engine_1 = require("../policy-engine");
 const router = (0, express_1.Router)();
 exports.supervisorRouter = router;
 // POST /supervisor/runs - Create a new run
@@ -50,6 +52,17 @@ router.post('/runs/:id/spawn', async (req, res) => {
     }
     if (!project.settings.capabilities.EXEC_SHELL) {
         res.status(403).json({ error: 'EXEC_SHELL capability not enabled for this project' });
+        return;
+    }
+    const policy = database_1.policyDb.getByProject(run.projectId) || policy_engine_1.defaultProjectPolicy;
+    const commandString = [cmd, ...args].join(' ');
+    const policyCheck = (0, policy_engine_1.checkCommandPolicy)(policy, commandString);
+    if (!policyCheck.allowed) {
+        res.status(403).json({
+            error: `Policy blocked: ${policyCheck.reason}`,
+            code: policyCheck.code,
+            requestApproval: policyCheck.requestApproval,
+        });
         return;
     }
     const pathResult = sandbox_1.sandbox.getProjectPath(run.projectId);

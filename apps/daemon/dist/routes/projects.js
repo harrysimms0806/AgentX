@@ -11,6 +11,8 @@ const path_1 = __importDefault(require("path"));
 const sandbox_1 = require("../sandbox");
 const audit_1 = require("../audit");
 const projects_1 = require("../store/projects");
+const database_1 = require("../database");
+const policy_engine_1 = require("../policy-engine");
 const router = (0, express_1.Router)();
 exports.projectsRouter = router;
 // Default project settings
@@ -79,6 +81,7 @@ router.post('/', (req, res) => {
         settings: defaultSettings,
     };
     projects_1.projects.set(id, project);
+    database_1.policyDb.upsert(id, policy_engine_1.defaultProjectPolicy);
     // Audit log
     audit_1.audit.logLegacy(id, 'system', 'PROJECT_CREATE', { name }, 'daemon');
     res.status(201).json(project);
@@ -136,4 +139,45 @@ router.put('/:id/settings', (req, res) => {
         project.settings.preferredAgents = preferredAgents;
     }
     res.json(project.settings);
+});
+// GET /projects/:id/policy - Get project policy
+router.get('/:id/policy', (req, res) => {
+    const { id } = req.params;
+    const project = projects_1.projects.get(id);
+    if (!project) {
+        res.status(404).json({ error: 'Project not found' });
+        return;
+    }
+    const policy = database_1.policyDb.getByProject(id) || policy_engine_1.defaultProjectPolicy;
+    res.json(policy);
+});
+// PUT /projects/:id/policy - Update project policy
+router.put('/:id/policy', (req, res) => {
+    const { id } = req.params;
+    const project = projects_1.projects.get(id);
+    if (!project) {
+        res.status(404).json({ error: 'Project not found' });
+        return;
+    }
+    const current = database_1.policyDb.getByProject(id) || policy_engine_1.defaultProjectPolicy;
+    const next = {
+        ...current,
+        ...req.body,
+    };
+    if (!Array.isArray(next.allowedWriteGlobs) || !Array.isArray(next.blockedCommandPatterns) || !Array.isArray(next.approvalRequiredFor)) {
+        res.status(400).json({ error: 'Invalid policy payload' });
+        return;
+    }
+    if (typeof next.maxFilesChangedPerRun !== 'number' || next.maxFilesChangedPerRun < 1 || next.maxFilesChangedPerRun > 1000) {
+        res.status(400).json({ error: 'maxFilesChangedPerRun must be a number between 1 and 1000' });
+        return;
+    }
+    database_1.policyDb.upsert(id, next);
+    audit_1.audit.logLegacy(id, 'user', 'POLICY_UPDATE', {
+        allowedWriteGlobs: next.allowedWriteGlobs.length,
+        blockedCommandPatterns: next.blockedCommandPatterns.length,
+        approvalRequiredFor: next.approvalRequiredFor,
+        maxFilesChangedPerRun: next.maxFilesChangedPerRun,
+    }, req.session?.clientId);
+    res.json(next);
 });

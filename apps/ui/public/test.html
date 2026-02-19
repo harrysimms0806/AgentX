@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>AgentX Test</title>
+  <style>
+    body { font-family: system-ui; padding: 20px; background: #1a1a1a; color: #fff; }
+    .status { padding: 10px; border-radius: 8px; margin: 10px 0; }
+    .ok { background: #2d5a2d; }
+    .error { background: #5a2d2d; }
+    .pending { background: #5a5a2d; }
+    button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+    pre { background: #2a2a2a; padding: 10px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>AgentX Connection Test</h1>
+  <div id="status" class="status pending">Testing connection...</div>
+  <div id="actions">
+    <button onclick="testDiscovery()">Test Discovery</button>
+    <button onclick="testHealth()">Test Health</button>
+    <button onclick="testSession()">Create Session</button>
+    <button onclick="window.location.href='http://localhost:3000'">Open AgentX UI</button>
+  </div>
+  <pre id="output"></pre>
+
+  <script>
+    const output = document.getElementById('output');
+    const status = document.getElementById('status');
+    
+    function log(msg) {
+      output.textContent += msg + '\n';
+    }
+    
+    async function testDiscovery() {
+      try {
+        log('Testing discovery...');
+        const res = await fetch('/api/daemon/discovery');
+        const data = await res.json();
+        log('Discovery: ' + JSON.stringify(data, null, 2));
+        status.textContent = 'Discovery OK';
+        status.className = 'status ok';
+      } catch (err) {
+        log('Discovery error: ' + err);
+        status.textContent = 'Discovery failed';
+        status.className = 'status error';
+      }
+    }
+    
+    async function testHealth() {
+      try {
+        log('Testing health...');
+        const res = await fetch('/api/daemon/health');
+        const data = await res.json();
+        log('Health: ' + JSON.stringify(data, null, 2));
+        status.textContent = 'Health OK - Daemon is running';
+        status.className = 'status ok';
+      } catch (err) {
+        log('Health error: ' + err);
+        status.textContent = 'Health check failed';
+        status.className = 'status error';
+      }
+    }
+    
+    async function testSession() {
+      try {
+        log('Creating session...');
+        const res = await fetch('/api/daemon/auth/session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clientId: 'test' })
+        });
+        const data = await res.json();
+        log('Session: ' + JSON.stringify(data, null, 2));
+        status.textContent = 'Session created';
+        status.className = 'status ok';
+      } catch (err) {
+        log('Session error: ' + err);
+        status.textContent = 'Session failed';
+        status.className = 'status error';
+      }
+    }
+    
+    // Auto-test on load
+    testDiscovery().then(() => testHealth());
+  </script>
+</body>
+</html>

@@ -8,10 +8,15 @@ export interface Config {
     maxOutputBuffer: number;
     defaultTimeout: number;
     logRetention: number;
+    aiEngine: 'external' | 'openclaw';
+    openclaw: {
+        gatewayUrl: string;
+        token: string;
+        port: number;
+        reconnectInitialDelayMs: number;
+        reconnectMaxDelayMs: number;
+        reconnectMultiplier: number;
+    };
 }
 export declare let config: Config;
-/**
- * Initialize configuration with port discovery
- * Must be called before accessing config
- */
 export declare function initializeConfig(): Promise<Config>;

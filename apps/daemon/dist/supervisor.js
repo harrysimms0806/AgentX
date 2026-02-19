@@ -45,6 +45,7 @@ const child_process_1 = require("child_process");
 const node_pty_1 = require("node-pty");
 const events_1 = require("events");
 const openclaw_adapter_1 = require("./openclaw-adapter");
+const git_inspector_1 = require("./git-inspector");
 class Supervisor extends events_1.EventEmitter {
     runs = new Map();
     logsDir = '';
@@ -743,7 +744,18 @@ class Supervisor extends events_1.EventEmitter {
             }
             run.exitCode = code ?? undefined;
             run.endedAt = new Date().toISOString();
-            run.summary = run.status === 'succeeded' ? 'Agent run completed successfully' : run.summary || 'Agent run failed';
+            if (run.status === 'succeeded') {
+                try {
+                    const summary = (0, git_inspector_1.buildRunSummary)(cwd, prompt);
+                    run.summary = JSON.stringify(summary);
+                }
+                catch {
+                    run.summary = 'Agent run completed successfully';
+                }
+            }
+            else {
+                run.summary = run.summary || 'Agent run failed';
+            }
             run.logStream?.end();
             this.persistRuns();
             this.emit('run:status', this.toPublicRun(run));
