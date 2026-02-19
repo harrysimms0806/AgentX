@@ -23,6 +23,7 @@ export interface DiscoveryResponse {
 export interface ApiError {
   error: string;
   code?: string;
+  requestApproval?: boolean;
 }
 
 export interface FileTreeResponse {
@@ -34,6 +35,54 @@ export interface FileTreeResponse {
 export interface FileReadResponse {
   content: string;
   size: number;
+}
+
+export interface GitStatusFile {
+  path: string;
+  stagedStatus: string;
+  unstagedStatus: string;
+}
+
+
+
+export interface ProjectPolicy {
+  allowedWriteGlobs: string[];
+  blockedCommandPatterns: string[];
+  approvalRequiredFor: Array<'write_files' | 'run_commands' | 'git_commit'>;
+  maxFilesChangedPerRun: number;
+}
+
+
+
+export interface ContextSnippet {
+  id: string;
+  sourceType: 'file' | 'run' | 'chat';
+  sourceRef: string;
+  score: number;
+  reason: string;
+  updatedAt: string;
+  contentPreview?: string;
+}
+
+export interface StoredContextPack {
+  id: string;
+  createdAt: string;
+  runId?: string;
+  retrievalDebug?: ContextSnippet[];
+}
+
+export interface ProjectBriefSnippet {
+  id: string;
+  snippet: ContextSnippet;
+  pinnedAt: string;
+}
+
+export interface RunRecord {
+  id: string;
+  status: string;
+  summary?: string;
+  startedAt?: string;
+  endedAt?: string;
 }
 
 async function parseJson<T>(res: Response): Promise<T> {
@@ -146,6 +195,21 @@ export async function readFile(projectId: string, filePath: string, token: strin
   return daemonRequest<FileReadResponse>(`/fs/read?${query}`, {}, token);
 }
 
+export async function getGitStatus(projectId: string, token: string | null) {
+  const query = new URLSearchParams({ projectId }).toString();
+  return daemonRequest<{ files: GitStatusFile[] }>(`/git/status?${query}`, {}, token);
+}
+
+export async function getGitDiff(projectId: string, token: string | null, filePath?: string) {
+  const query = new URLSearchParams({ projectId, ...(filePath ? { path: filePath } : {}) }).toString();
+  return daemonRequest<{ diff: string }>(`/git/diff?${query}`, {}, token);
+}
+
+export async function getRuns(projectId: string, token: string | null) {
+  const query = new URLSearchParams({ projectId }).toString();
+  return daemonRequest<{ runs: RunRecord[] }>(`/runs?${query}`, {}, token);
+}
+
 
 export async function getTerminals(token: string | null, projectId: string) {
   const query = `?${new URLSearchParams({ projectId }).toString()}`;
@@ -166,4 +230,99 @@ export async function clearTerminal(terminalId: string, projectId: string, token
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ projectId }),
   }, token);
+}
+
+
+export async function getProjectPolicy(projectId: string, token: string | null) {
+  return daemonRequest<ProjectPolicy>(`/projects/${projectId}/policy`, {}, token);
+}
+
+export async function updateProjectPolicy(projectId: string, policy: ProjectPolicy, token: string | null) {
+  return daemonRequest<ProjectPolicy>(`/projects/${projectId}/policy`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(policy),
+  }, token);
+}
+
+
+export async function getContextPacks(projectId: string, token: string | null) {
+  const query = new URLSearchParams({ projectId }).toString();
+  return daemonRequest<{ contextPacks: StoredContextPack[] }>(`/agents/context-packs?${query}`, {}, token);
+}
+
+export async function getProjectBrief(projectId: string, token: string | null) {
+  const query = new URLSearchParams({ projectId }).toString();
+  return daemonRequest<{ snippets: ProjectBriefSnippet[] }>(`/agents/project-brief?${query}`, {}, token);
+}
+
+export async function pinProjectBriefSnippet(projectId: string, snippet: ContextSnippet, token: string | null) {
+  return daemonRequest<{ success: boolean; snippetId: string }>(`/agents/project-brief/pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId, snippet }),
+  }, token);
+}
+
+export async function unpinProjectBriefSnippet(projectId: string, snippetId: string, token: string | null) {
+  return daemonRequest<{ success: boolean }>(`/agents/project-brief/unpin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId, snippetId }),
+  }, token);
+}
+
+
+export interface WorkflowTemplate {
+  id: string;
+  name: string;
+  description: string;
+  allowedAgents: string[];
+  requiredApprovals: Array<'write_files' | 'run_commands' | 'git_commit'>;
+  steps: string[];
+}
+
+export interface WorkflowRun {
+  id: string;
+  templateId: string;
+  projectId: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  createdAt: string;
+  startedAt?: string;
+  endedAt?: string;
+  checkpointBefore?: string;
+  checkpointAfter?: string;
+  steps: Array<{ id: string; label: string; status: 'pending' | 'running' | 'succeeded' | 'failed'; startedAt?: string; endedAt?: string }>;
+}
+
+export async function getWorkflowTemplates(token: string | null) {
+  return daemonRequest<{ templates: WorkflowTemplate[] }>('/workflows/templates', {}, token);
+}
+
+export async function startWorkflowRun(projectId: string, templateId: string, token: string | null) {
+  return daemonRequest<{ run: WorkflowRun }>('/workflows/runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId, templateId }),
+  }, token);
+}
+
+export async function getWorkflowRuns(projectId: string, token: string | null) {
+  const query = new URLSearchParams({ projectId }).toString();
+  return daemonRequest<{ runs: WorkflowRun[] }>(`/workflows/runs?${query}`, {}, token);
+}
+
+
+export interface ObservabilityMetrics {
+  runsPerDay: Array<{ day: string; count: number }>;
+  avgRunDurationMs: number;
+  toolCallCounts: Record<string, number>;
+  failureReasons: Array<{ runId: string; reason: string }>;
+  expensiveRuns: Array<{ runId: string; projectId: string; status: string; durationMs: number }>;
+  generatedAt: string;
+}
+
+export async function getObservabilityMetrics(projectId: string | undefined, token: string | null) {
+  const query = new URLSearchParams(projectId ? { projectId } : {}).toString();
+  return daemonRequest<ObservabilityMetrics>(`/audit/metrics${query ? `?${query}` : ''}`, {}, token);
 }

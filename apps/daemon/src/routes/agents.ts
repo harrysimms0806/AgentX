@@ -7,6 +7,7 @@ import { agentManager } from '../agents';
 import { agentRunner } from '../agent-runner';
 import { audit } from '../audit';
 import { projects } from '../store/projects';
+import { projectBriefDb } from '../database';
 import { renderInjectedContext } from '../context-pack';
 
 const router = Router();
@@ -247,6 +248,7 @@ router.get('/context-pack/:id', (req, res) => {
 
   res.json({
     contextPack: pack,
+    projectBrief: projectBriefDb.list(projectId),
     injectedContext: renderInjectedContext(pack),
   });
 });
@@ -414,6 +416,95 @@ router.delete('/instances/:id', async (req, res) => {
   });
 
   res.json({ success: true, message: 'Agent stopped' });
+});
+
+
+// GET /agents/project-brief - list pinned snippets
+router.get('/project-brief', async (req, res) => {
+  const projectId = req.query.projectId as string;
+  const clientId = (req as any).session?.clientId || 'unknown';
+  if (!projectId) {
+    res.status(400).json({ error: 'projectId is required' });
+    return;
+  }
+
+  const project = projects.get(projectId);
+  if (!project) {
+    res.status(404).json({ error: 'Project not found' });
+    return;
+  }
+
+  const snippets = projectBriefDb.list(projectId);
+  await audit.log({
+    id: randomUUID(),
+    projectId,
+    actorType: 'user',
+    actorId: clientId,
+    actionType: 'PROJECT_BRIEF_READ',
+    payload: { count: snippets.length },
+    createdAt: new Date().toISOString(),
+  });
+
+  res.json({ snippets });
+});
+
+// POST /agents/project-brief/pin
+router.post('/project-brief/pin', async (req, res) => {
+  const { projectId, snippet } = req.body;
+  const clientId = (req as any).session?.clientId || 'unknown';
+  if (!projectId || !snippet || typeof snippet !== 'object') {
+    res.status(400).json({ error: 'projectId and snippet are required' });
+    return;
+  }
+
+  const project = projects.get(projectId);
+  if (!project) {
+    res.status(404).json({ error: 'Project not found' });
+    return;
+  }
+
+  const snippetId = String((snippet as any).id || `brief-${Date.now()}`);
+  projectBriefDb.upsert(projectId, snippetId, snippet);
+
+  await audit.log({
+    id: randomUUID(),
+    projectId,
+    actorType: 'user',
+    actorId: clientId,
+    actionType: 'PROJECT_BRIEF_PIN',
+    payload: { snippetId },
+    createdAt: new Date().toISOString(),
+  });
+
+  res.status(201).json({ success: true, snippetId });
+});
+
+// POST /agents/project-brief/unpin
+router.post('/project-brief/unpin', async (req, res) => {
+  const { projectId, snippetId } = req.body;
+  const clientId = (req as any).session?.clientId || 'unknown';
+  if (!projectId || !snippetId) {
+    res.status(400).json({ error: 'projectId and snippetId are required' });
+    return;
+  }
+
+  const removed = projectBriefDb.remove(projectId, snippetId);
+  if (!removed) {
+    res.status(404).json({ error: 'Pinned snippet not found' });
+    return;
+  }
+
+  await audit.log({
+    id: randomUUID(),
+    projectId,
+    actorType: 'user',
+    actorId: clientId,
+    actionType: 'PROJECT_BRIEF_UNPIN',
+    payload: { snippetId },
+    createdAt: new Date().toISOString(),
+  });
+
+  res.json({ success: true });
 });
 
 export { router as agentsRouter };

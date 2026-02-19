@@ -84,7 +84,7 @@ export interface ContextPack {
   };
   sizeChars: number;
   retrievedSnippetIds?: string[];
-  retrievalDebug?: Array<{ id: string; source: string; score: number; matchedKeywords: string[]; updatedAt: string }>;
+  retrievalDebug?: Array<{ id: string; sourceType: 'file' | 'run' | 'chat'; sourceRef: string; score: number; reason: string; updatedAt: string; contentPreview?: string }>;
   truncated?: boolean;
   budgetChars?: number;
 }

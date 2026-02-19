@@ -100,10 +100,12 @@ export interface ContextPack {
   retrievedSnippetIds?: string[];
   retrievalDebug?: Array<{
     id: string;
-    source: string;
+    sourceType: 'file' | 'run' | 'chat';
+    sourceRef: string;
     score: number;
-    matchedKeywords: string[];
+    reason: string;
     updatedAt: string;
+    contentPreview?: string;
   }>;
   truncated?: boolean;
   budgetChars?: number;

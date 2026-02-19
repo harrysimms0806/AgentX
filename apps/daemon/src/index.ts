@@ -31,6 +31,7 @@ import { gitRouter } from './routes/git';
 import { terminalsRouter } from './routes/terminals';
 import { agentsRouter } from './routes/agents';
 import { runsRouter } from './routes/runs';
+import { workflowsRouter } from './routes/workflows';
 
 const app = express();
 
@@ -82,6 +83,7 @@ app.use('/git', authMiddleware, gitRouter);
 app.use('/terminals', authMiddleware, terminalsRouter);
 app.use('/agents', authMiddleware, agentsRouter);
 app.use('/runs', authMiddleware, runsRouter);
+app.use('/workflows', authMiddleware, workflowsRouter);
 
 // Error handler
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {

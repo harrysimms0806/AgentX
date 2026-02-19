@@ -7,6 +7,8 @@ import { sandbox } from '../sandbox';
 import { audit } from '../audit';
 import { projects } from '../store/projects';
 import { Project, ProjectSettings } from '@agentx/api-types';
+import { policyDb } from '../database';
+import { defaultProjectPolicy } from '../policy-engine';
 
 const router = Router();
 
@@ -94,6 +96,7 @@ router.post('/', (req, res) => {
   };
 
   projects.set(id, project);
+  policyDb.upsert(id, defaultProjectPolicy);
   
   // Audit log
   audit.logLegacy(id, 'system', 'PROJECT_CREATE', { name }, 'daemon');
@@ -171,6 +174,59 @@ router.put('/:id/settings', (req, res) => {
   }
 
   res.json(project.settings);
+});
+
+
+// GET /projects/:id/policy - Get project policy
+router.get('/:id/policy', (req, res) => {
+  const { id } = req.params;
+  const project = projects.get(id);
+
+  if (!project) {
+    res.status(404).json({ error: 'Project not found' });
+    return;
+  }
+
+  const policy = policyDb.getByProject(id) || defaultProjectPolicy;
+  res.json(policy);
+});
+
+// PUT /projects/:id/policy - Update project policy
+router.put('/:id/policy', (req, res) => {
+  const { id } = req.params;
+  const project = projects.get(id);
+
+  if (!project) {
+    res.status(404).json({ error: 'Project not found' });
+    return;
+  }
+
+  const current = policyDb.getByProject(id) || defaultProjectPolicy;
+  const next = {
+    ...current,
+    ...req.body,
+  };
+
+  if (!Array.isArray(next.allowedWriteGlobs) || !Array.isArray(next.blockedCommandPatterns) || !Array.isArray(next.approvalRequiredFor)) {
+    res.status(400).json({ error: 'Invalid policy payload' });
+    return;
+  }
+
+  if (typeof next.maxFilesChangedPerRun !== 'number' || next.maxFilesChangedPerRun < 1 || next.maxFilesChangedPerRun > 1000) {
+    res.status(400).json({ error: 'maxFilesChangedPerRun must be a number between 1 and 1000' });
+    return;
+  }
+
+  policyDb.upsert(id, next);
+
+  audit.logLegacy(id, 'user', 'POLICY_UPDATE', {
+    allowedWriteGlobs: next.allowedWriteGlobs.length,
+    blockedCommandPatterns: next.blockedCommandPatterns.length,
+    approvalRequiredFor: next.approvalRequiredFor,
+    maxFilesChangedPerRun: next.maxFilesChangedPerRun,
+  }, (req as any).session?.clientId);
+
+  res.json(next);
 });
 
 export { router as projectsRouter };

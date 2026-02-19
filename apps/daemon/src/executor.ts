@@ -5,6 +5,14 @@ import { randomUUID } from 'crypto';
 import path from 'path';
 import type { AgentDefinition, AgentInstance, ContextPack, AgentTask } from './agents';
 import { renderInjectedContext } from './context-pack';
+import { policyDb } from './database';
+import {
+  checkCommandPolicy,
+  checkGitCommitPolicy,
+  checkWritePathPolicy,
+  defaultProjectPolicy,
+  ensureWithinRunFileLimit,
+} from './policy-engine';
 
 // Model providers
 export type ModelProvider = 'openai' | 'anthropic' | 'ollama' | 'openclaw';
@@ -143,6 +151,20 @@ export const agentTools: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'gitCommit',
+      description: 'Commit current git changes',
+      parameters: {
+        type: 'object',
+        properties: {
+          message: { type: 'string', description: 'Commit message' },
+        },
+        required: ['message'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'complete',
       description: 'Mark the task as complete',
       parameters: {
@@ -173,6 +195,7 @@ export interface ExecutionResult {
 // Agent executor class
 export class AgentExecutor {
   private config: ModelConfig;
+  private touchedFilesByProject: Map<string, Set<string>> = new Map();
 
   constructor(config: ModelConfig) {
     this.config = config;
@@ -248,6 +271,7 @@ When you need to use a tool, respond with a tool call. When done, use the 'compl
         listFiles: 'read_files',
         gitStatus: 'git_operations',
         searchFiles: 'read_files',
+        gitCommit: 'git_operations',
       };
       
       return capabilities.includes(capabilityMap[toolName]);
@@ -310,6 +334,7 @@ When you need to use a tool, respond with a tool call. When done, use the 'compl
     // Import here to avoid circular dependencies
     const { sandbox } = await import('./sandbox');
     const { supervisor } = await import('./supervisor');
+    const policy = policyDb.getByProject(projectId) || defaultProjectPolicy;
 
     switch (name) {
       case 'readFile': {
@@ -325,12 +350,24 @@ When you need to use a tool, respond with a tool call. When done, use the 'compl
       }
 
       case 'writeFile': {
-        // Requires write capability check
+        const writePolicy = checkWritePathPolicy(policy, args.path);
+        if (!writePolicy.allowed) {
+          return `Policy blocked: ${writePolicy.reason}`;
+        }
+
+        const touched = this.touchedFilesByProject.get(projectId) || new Set<string>();
+        const runLimit = ensureWithinRunFileLimit(policy, touched, args.path);
+        if (!runLimit.allowed) {
+          return `Policy blocked: ${runLimit.reason}`;
+        }
+
         const check = sandbox.validatePath(projectId, args.path);
         if (!check.allowed) return `Error: ${check.error}`;
         try {
           const fs = await import('fs');
           fs.writeFileSync(check.realPath!, args.content);
+          touched.add(args.path);
+          this.touchedFilesByProject.set(projectId, touched);
           return `File ${args.path} written successfully`;
         } catch (err: any) {
           return `Error writing file: ${err.message}`;
@@ -338,6 +375,11 @@ When you need to use a tool, respond with a tool call. When done, use the 'compl
       }
 
       case 'runCommand': {
+        const commandPolicy = checkCommandPolicy(policy, args.command);
+        if (!commandPolicy.allowed) {
+          return `Policy blocked: ${commandPolicy.reason}`;
+        }
+
         // Parse command into cmd and args
         const parts = args.command.split(' ');
         const cmd = parts[0];
@@ -377,6 +419,14 @@ When you need to use a tool, respond with a tool call. When done, use the 'compl
       case 'searchFiles': {
         // Simple grep-like search
         return `Search for "${args.query}": Not implemented`;
+      }
+
+      case 'gitCommit': {
+        const gitCommitPolicy = checkGitCommitPolicy(policy);
+        if (!gitCommitPolicy.allowed) {
+          return `Policy blocked: ${gitCommitPolicy.reason}`;
+        }
+        return 'Git commit tool not implemented';
       }
 
       case 'complete': {
