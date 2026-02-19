@@ -24,6 +24,7 @@ import {
   type RunRecord,
 } from '@/lib/daemon/client';
 import type { FileNode } from '@agentx/api-types';
+import ChatPanel from '@/components/Chat/ChatPanel';
 
 const CodeEditor = dynamic(() => import('@/components/workspace/LazyCodeEditor'), {
   ssr: false,
@@ -310,7 +311,7 @@ export default function WorkspacePage() {
   }
 
   return (
-    <div style={{ height: 'calc(100vh - 64px)', display: 'grid', gridTemplateColumns: '300px 1fr 420px' }}>
+    <div style={{ height: 'calc(100vh - 64px)', display: 'grid', gridTemplateColumns: '280px 1fr 420px' }}>
       <aside style={{ borderRight: '1px solid var(--border)', overflow: 'auto', padding: 12 }}>
         <h1 style={{ marginBottom: 12 }}>Workspace</h1>
         <label style={{ display: 'block', marginBottom: 12 }}>
@@ -484,6 +485,8 @@ export default function WorkspacePage() {
                 ))}
               </div>
             </div>
+            <ChatPanel />
+
             <div style={{ padding: 12, overflow: 'auto' }}>
               <div style={{ fontWeight: 600, marginBottom: 8 }}>Project Brief (pinned)</div>
               {projectBrief.length === 0 ? (
