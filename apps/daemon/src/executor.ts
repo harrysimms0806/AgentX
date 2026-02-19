@@ -13,6 +13,9 @@ import {
   defaultProjectPolicy,
   ensureWithinRunFileLimit,
 } from './policy-engine';
+import { OPENCLAW_ALLOWED_TOOLS } from './openclaw-protocol';
+import { config } from './config';
+import { pluginManager } from './plugins';
 
 // Model providers
 export type ModelProvider = 'openai' | 'anthropic' | 'ollama' | 'openclaw';
@@ -72,6 +75,8 @@ export const agentTools: ToolDefinition[] = [
         type: 'object',
         properties: {
           path: { type: 'string', description: 'Relative path to file' },
+          startLine: { type: 'number', description: 'Optional 1-indexed start line for range read' },
+          endLine: { type: 'number', description: 'Optional 1-indexed end line for range read' },
         },
         required: ['path'],
       },
@@ -234,7 +239,7 @@ export class AgentExecutor {
       content: `${agent.systemPrompt}
 
 You have access to the following tools. Use them to complete your task:
-${agentTools.map(t => `- ${t.function.name}: ${t.function.description}`).join('\n')}
+${this.getAvailableTools().map(t => `- ${t.function.name}: ${t.function.description}`).join('\n')}
 
 Project Context Pack:
 ${renderInjectedContext(contextPack)}
@@ -260,7 +265,7 @@ When you need to use a tool, respond with a tool call. When done, use the 'compl
     onMessage?: (msg: Message) => void
   ): Promise<ExecutionResult> {
     // Filter tools based on capabilities
-    const availableTools = agentTools.filter(tool => {
+    const availableTools = this.getAvailableTools().filter(tool => {
       const toolName = tool.function.name;
       if (toolName === 'complete') return true; // Always allow complete
       
@@ -280,6 +285,28 @@ When you need to use a tool, respond with a tool call. When done, use the 'compl
     // For Phase 5, we'll implement a placeholder
     // In production, this would call OpenAI, Anthropic, etc.
     try {
+      if (this.config.provider === 'openclaw') {
+        const openclawResponse: Message = {
+          role: 'assistant',
+          content: 'OpenClaw engine active. Waiting for tool-driven execution loop.',
+        };
+
+        if (onMessage) {
+          onMessage(openclawResponse);
+        }
+
+        return {
+          success: true,
+          output: openclawResponse.content,
+          messages: [...messages, openclawResponse],
+          tokensUsed: {
+            prompt: JSON.stringify(messages).length / 4,
+            completion: openclawResponse.content.length / 4,
+            total: (JSON.stringify(messages).length + openclawResponse.content.length) / 4,
+          },
+        };
+      }
+
       // Check if we have an API key
       if (!this.config.apiKey && this.config.provider !== 'ollama') {
         return {
@@ -321,6 +348,26 @@ When you need to use a tool, respond with a tool call. When done, use the 'compl
     }
   }
 
+  private getAvailableTools(): ToolDefinition[] {
+    const pluginTools = pluginManager.getRegisteredTools().map((tool) => ({
+      type: 'function' as const,
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: {
+          type: 'object' as const,
+          properties: {
+            input: { type: 'string', description: 'Plugin specific input payload' },
+          },
+          required: [],
+        },
+      },
+    }));
+
+    return [...agentTools, ...pluginTools];
+  }
+
+
   /**
    * Execute a tool call
    */
@@ -329,7 +376,17 @@ When you need to use a tool, respond with a tool call. When done, use the 'compl
     projectId: string
   ): Promise<string> {
     const { name, arguments: argsStr } = toolCall.function;
-    const args = JSON.parse(argsStr);
+
+    if (!OPENCLAW_ALLOWED_TOOLS.has(name)) {
+      return `Unknown or disallowed tool: ${name}`;
+    }
+
+    let args: Record<string, any> = {};
+    try {
+      args = argsStr ? JSON.parse(argsStr) : {};
+    } catch (err: any) {
+      return `Invalid tool arguments: ${err.message}`;
+    }
 
     // Import here to avoid circular dependencies
     const { sandbox } = await import('./sandbox');
@@ -343,7 +400,25 @@ When you need to use a tool, respond with a tool call. When done, use the 'compl
         try {
           const fs = await import('fs');
           const content = fs.readFileSync(check.realPath!, 'utf8');
-          return content;
+          const totalChars = content.length;
+
+          const startLine = Number.isFinite(Number(args.startLine)) ? Math.max(1, Number(args.startLine)) : undefined;
+          const endLine = Number.isFinite(Number(args.endLine)) ? Math.max(1, Number(args.endLine)) : undefined;
+
+          const lines = content.split(/\r?\n/);
+          const safeStart = startLine ?? 1;
+          const safeEnd = Math.min(lines.length, endLine ?? lines.length);
+
+          if (safeEnd < safeStart) {
+            return 'Error: endLine must be greater than or equal to startLine';
+          }
+
+          if (!startLine && !endLine && totalChars > 200000) {
+            return `File is large (${totalChars} chars). Summary: ${args.path} with ${lines.length} lines. Content available on request via readFile(path,startLine,endLine).`;
+          }
+
+          const segment = lines.slice(safeStart - 1, safeEnd).join('\n');
+          return segment;
         } catch (err: any) {
           return `Error reading file: ${err.message}`;
         }
@@ -433,22 +508,31 @@ When you need to use a tool, respond with a tool call. When done, use the 'compl
         return `Task completed: ${args.summary}`;
       }
 
-      default:
+      default: {
+        const pluginResult = await pluginManager.executeTool(name, args, `agent:${projectId}`);
+        if (typeof pluginResult !== 'undefined') {
+          return JSON.stringify(pluginResult);
+        }
         return `Unknown tool: ${name}`;
+      }
     }
   }
 }
 
 // Factory for creating executors
-export function createExecutor(config?: Partial<ModelConfig>): AgentExecutor {
+export function createExecutor(overrides?: Partial<ModelConfig>): AgentExecutor {
   const fullConfig: ModelConfig = {
-    provider: config?.provider || 'openai',
-    model: config?.model || 'gpt-4',
-    apiKey: config?.apiKey || process.env.OPENAI_API_KEY,
-    temperature: config?.temperature ?? 0.7,
-    maxTokens: config?.maxTokens || 4000,
-    ...config,
+    provider: overrides?.provider || (configProviderFromEngine()),
+    model: overrides?.model || ((config as any)?.aiEngine === 'openclaw' ? 'bud' : 'gpt-4'),
+    apiKey: overrides?.apiKey || process.env.OPENAI_API_KEY,
+    temperature: overrides?.temperature ?? 0.7,
+    maxTokens: overrides?.maxTokens || 4000,
+    ...overrides,
   };
 
   return new AgentExecutor(fullConfig);
+}
+
+function configProviderFromEngine(): ModelProvider {
+  return (config as any)?.aiEngine === 'openclaw' ? 'openclaw' : 'openai';
 }

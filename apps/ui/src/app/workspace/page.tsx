@@ -11,6 +11,9 @@ import {
   getProjectBrief,
   getProjects,
   getRuns,
+  getBudSessions,
+  getBudSessionStatus,
+  killBudSession,
   pinProjectBriefSnippet,
   readFile,
   unpinProjectBriefSnippet,
@@ -49,6 +52,10 @@ export default function WorkspacePage() {
   const [activeRightTab, setActiveRightTab] = useState<'review' | 'context'>('review');
   const [contextSnippets, setContextSnippets] = useState<ContextSnippet[]>([]);
   const [projectBrief, setProjectBrief] = useState<ProjectBriefSnippet[]>([]);
+  const [budSessions, setBudSessions] = useState<Array<{ sessionId: string; runId?: string; status: string; lastSeenAt: string }>>([]);
+  const [selectedBudSessionId, setSelectedBudSessionId] = useState<string>('');
+  const [budRunSteps, setBudRunSteps] = useState<Array<{ id: string; type: string; content: string; timestamp: string }>>([]);
+  const [latestContextPack, setLatestContextPack] = useState<{ sizeChars?: number; budgetChars?: number; truncated?: boolean } | null>(null);
 
   useEffect(() => {
     if (!token || !connected) return;
@@ -73,6 +80,40 @@ export default function WorkspacePage() {
     };
   }, [token, connected, projectId]);
 
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const channel = new BroadcastChannel('agentx-multitab-sync');
+    const onMessage = (event: MessageEvent) => {
+      const payload = event.data as { type?: string; projectId?: string; budSessionId?: string };
+      if (payload?.type === 'active-project' && payload.projectId && payload.projectId !== projectId) {
+        setProjectId(payload.projectId);
+      }
+      if (payload?.type === 'selected-bud-session' && payload.budSessionId !== undefined && payload.budSessionId !== selectedBudSessionId) {
+        setSelectedBudSessionId(payload.budSessionId);
+      }
+    };
+    channel.addEventListener('message', onMessage);
+    return () => {
+      channel.removeEventListener('message', onMessage);
+      channel.close();
+    };
+  }, [projectId, selectedBudSessionId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !projectId) return;
+    const channel = new BroadcastChannel('agentx-multitab-sync');
+    channel.postMessage({ type: 'active-project', projectId, ts: Date.now() });
+    channel.close();
+  }, [projectId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const channel = new BroadcastChannel('agentx-multitab-sync');
+    channel.postMessage({ type: 'selected-bud-session', budSessionId: selectedBudSessionId, ts: Date.now() });
+    channel.close();
+  }, [selectedBudSessionId]);
+
   useEffect(() => {
     if (!projectId || !token) return;
 
@@ -82,11 +123,12 @@ export default function WorkspacePage() {
   }, [projectId, token]);
 
   async function loadReviewData(targetProjectId: string, authToken: string) {
-    const [statusRes, runsRes, packsRes, briefRes] = await Promise.all([
+    const [statusRes, runsRes, packsRes, briefRes, budSessionsRes] = await Promise.all([
       getGitStatus(targetProjectId, authToken),
       getRuns(targetProjectId, authToken),
       getContextPacks(targetProjectId, authToken),
       getProjectBrief(targetProjectId, authToken),
+      getBudSessions(targetProjectId, authToken),
     ]);
 
     if (!statusRes.ok) {
@@ -112,10 +154,27 @@ export default function WorkspacePage() {
     if (packsRes.ok) {
       const latestPack = packsRes.data.contextPacks[0];
       setContextSnippets(latestPack?.retrievalDebug ?? []);
+      setLatestContextPack(latestPack ? {
+        sizeChars: latestPack.sizeChars,
+        budgetChars: latestPack.budgetChars,
+        truncated: latestPack.truncated,
+      } : null);
     }
 
     if (briefRes.ok) {
       setProjectBrief(briefRes.data.snippets);
+    }
+
+    if (budSessionsRes.ok) {
+      setBudSessions(budSessionsRes.data.sessions.map((s) => ({
+        sessionId: s.sessionId,
+        runId: s.runId,
+        status: s.status,
+        lastSeenAt: s.lastSeenAt,
+      })));
+      if (!selectedBudSessionId && budSessionsRes.data.sessions[0]) {
+        setSelectedBudSessionId(budSessionsRes.data.sessions[0].sessionId);
+      }
     }
   }
 
@@ -195,6 +254,37 @@ export default function WorkspacePage() {
     setProjectBrief((prev) => prev.filter((snippet) => snippet.id !== snippetId));
   }
 
+
+  useEffect(() => {
+    if (!selectedBudSessionId || !token) return;
+
+    let active = true;
+    const poll = async () => {
+      const statusRes = await getBudSessionStatus(selectedBudSessionId, token);
+      if (active && statusRes.ok) {
+        setBudRunSteps(statusRes.data.run?.steps ?? []);
+      }
+    };
+
+    void poll();
+    const id = setInterval(() => { void poll(); }, 2000);
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
+  }, [selectedBudSessionId, token]);
+
+  async function killSelectedBudSession() {
+    if (!selectedBudSessionId || !token) return;
+    const res = await killBudSession(selectedBudSessionId, token);
+    if (!res.ok) {
+      setStatus(formatApiError(res.error));
+      return;
+    }
+    setStatus(`Killed Bud session ${selectedBudSessionId.slice(0, 8)}.`);
+    await loadReviewData(projectId, token);
+  }
+
   function toggleExpand(dirPath: string) {
     setExpandedPaths((prev) => {
       const next = new Set(prev);
@@ -207,6 +297,13 @@ export default function WorkspacePage() {
   }
 
   const visibleRootNodes = useMemo(() => treeByPath['.'] ?? [], [treeByPath]);
+
+
+  const contextBudget = latestContextPack?.budgetChars ?? 100000;
+  const contextUsed = latestContextPack?.sizeChars ?? 0;
+  const contextPercent = Math.min(100, Math.round((contextUsed / Math.max(1, contextBudget)) * 100));
+  const contextWarn = contextPercent >= 85;
+
 
   function formatApiError(error: { error: string; requestApproval?: boolean }) {
     return error.requestApproval ? `${error.error} — Request approval to continue.` : error.error;
@@ -328,6 +425,50 @@ export default function WorkspacePage() {
           </>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
+            <div style={{ borderBottom: '1px solid var(--border)', padding: 12 }}>
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>Context Capacity</div>
+              <div style={{ fontSize: 12, color: contextWarn ? 'var(--status-warning)' : 'var(--text-secondary)', marginBottom: 6 }}>
+                {contextUsed.toLocaleString()} / {contextBudget.toLocaleString()} chars ({contextPercent}%)
+                {contextWarn ? ' • Approaching context limit (85%+)' : ''}
+              </div>
+              <div style={{ height: 8, background: 'var(--muted)', borderRadius: 999, overflow: 'hidden' }}>
+                <div style={{
+                  width: `${contextPercent}%`,
+                  height: '100%',
+                  background: contextWarn ? 'var(--status-warning)' : 'var(--status-success)',
+                }} />
+              </div>
+              {latestContextPack?.truncated ? (
+                <div style={{ marginTop: 6, fontSize: 12, color: 'var(--status-warning)' }}>
+                  Latest context pack was truncated to fit the hard 100,000-char cap.
+                </div>
+              ) : null}
+            </div>
+
+            <div style={{ borderBottom: '1px solid var(--border)', padding: 12 }}>
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>Bud Sessions</div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <select value={selectedBudSessionId} onChange={(e) => setSelectedBudSessionId(e.target.value)} style={{ flex: 1 }}>
+                  <option value="">Select session…</option>
+                  {budSessions.map((session) => (
+                    <option key={session.sessionId} value={session.sessionId}>
+                      {session.sessionId.slice(0, 8)} • {session.status}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" onClick={() => void killSelectedBudSession()} disabled={!selectedBudSessionId}>Kill</button>
+              </div>
+              <div style={{ maxHeight: 140, overflow: 'auto', fontSize: 12, border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}>
+                {budRunSteps.length === 0 ? (
+                  <span style={{ color: 'var(--text-secondary)' }}>No Bud stream events yet.</span>
+                ) : budRunSteps.slice(-20).map((step) => (
+                  <div key={step.id} style={{ marginBottom: 4 }}>
+                    <strong>{step.type}</strong> — {step.content.slice(0, 100)}
+                  </div>
+                ))}
+              </div>
+            </div>
+
             <div style={{ borderBottom: '1px solid var(--border)', padding: 12 }}>
               <div style={{ fontWeight: 600, marginBottom: 8 }}>Snippets (source-linked)</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 280, overflow: 'auto' }}>

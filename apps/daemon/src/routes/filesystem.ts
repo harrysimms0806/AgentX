@@ -164,9 +164,9 @@ router.get('/tree', (req, res) => {
   }
 });
 
-// GET /fs/read?projectId=&path= - Read file
+// GET /fs/read?projectId=&path=&startLine=&endLine= - Read file (optionally by line range)
 router.get('/read', (req, res) => {
-  const { projectId, path: filePath } = req.query;
+  const { projectId, path: filePath, startLine, endLine } = req.query;
 
   if (!projectId || !filePath || typeof projectId !== 'string' || typeof filePath !== 'string') {
     res.status(400).json({ error: 'projectId and path required' });
@@ -202,12 +202,43 @@ router.get('/read', (req, res) => {
     }
 
     const content = fs.readFileSync(check.realPath!, 'utf8');
+    const lines = content.split(/\r?\n/);
 
-    if (Math.random() < READ_AUDIT_SAMPLE_RATE) {
-      audit.logLegacy(projectId, 'user', 'FILE_READ', { path: filePath, size: stats.size }, actorIdFromReq(req));
+    const parsedStart = typeof startLine === 'string' ? Number.parseInt(startLine, 10) : undefined;
+    const parsedEnd = typeof endLine === 'string' ? Number.parseInt(endLine, 10) : undefined;
+
+    if ((parsedStart !== undefined && (!Number.isFinite(parsedStart) || parsedStart < 1)) ||
+        (parsedEnd !== undefined && (!Number.isFinite(parsedEnd) || parsedEnd < 1))) {
+      res.status(400).json({ error: 'startLine/endLine must be positive integers' });
+      return;
     }
 
-    res.json({ content, size: stats.size });
+    if (parsedStart !== undefined && parsedEnd !== undefined && parsedEnd < parsedStart) {
+      res.status(400).json({ error: 'endLine must be greater than or equal to startLine' });
+      return;
+    }
+
+    const safeStart = parsedStart ?? 1;
+    const safeEnd = Math.min(lines.length, parsedEnd ?? lines.length);
+    const contentToReturn = lines.slice(safeStart - 1, safeEnd).join('\n');
+
+    if (Math.random() < READ_AUDIT_SAMPLE_RATE) {
+      audit.logLegacy(projectId, 'user', 'FILE_READ', {
+        path: filePath,
+        size: stats.size,
+        startLine: safeStart,
+        endLine: safeEnd,
+      }, actorIdFromReq(req));
+    }
+
+    res.json({
+      content: contentToReturn,
+      size: stats.size,
+      startLine: safeStart,
+      endLine: safeEnd,
+      totalLines: lines.length,
+      truncated: safeStart !== 1 || safeEnd !== lines.length,
+    });
   } catch (err) {
     res.status(500).json({ error: `Failed to read file: ${err}` });
   }

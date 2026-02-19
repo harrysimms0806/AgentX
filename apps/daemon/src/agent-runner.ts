@@ -4,9 +4,11 @@
 import { randomUUID } from 'crypto';
 import { agentManager, AgentInstance, AgentDefinition } from './agents';
 import { createExecutor, AgentExecutor, Message, ToolCall } from './executor';
+import { buildToolResultMessage, parseCompleteOrErrorMessage, parseToolCallMessage } from './openclaw-protocol';
 import { supervisor } from './supervisor';
 import { audit } from './audit';
-import { runDb } from './database';
+import { runDb, budSessionDb } from './database';
+import { wsServer } from './websocket';
 
 interface RunStep {
   id: string;
@@ -16,14 +18,20 @@ interface RunStep {
   timestamp: string;
 }
 
+interface QueuedToolWork {
+  toolCall: ToolCall;
+}
+
 interface AgentRunState {
   instanceId: string;
   runId: string;
-  status: 'running' | 'paused' | 'completed' | 'error';
+  status: 'running' | 'paused' | 'completed' | 'error' | 'killed';
   steps: RunStep[];
   messages: Message[];
   iteration: number;
   maxIterations: number;
+  queuedToolCalls: QueuedToolWork[];
+  processingQueue: boolean;
 }
 
 class AgentRunner {
@@ -73,6 +81,8 @@ class AgentRunner {
       messages: [],
       iteration: 0,
       maxIterations: definition.maxIterations,
+      queuedToolCalls: [],
+      processingQueue: false,
     };
 
     this.activeRuns.set(runId, state);
@@ -143,62 +153,18 @@ class AgentRunner {
         const lastMessage = state.messages[state.messages.length - 1];
         if (lastMessage?.toolCalls && lastMessage.toolCalls.length > 0) {
           for (const toolCall of lastMessage.toolCalls) {
-            // Add tool call step
-            const callStep: RunStep = {
-              id: `step-${randomUUID()}`,
-              type: 'tool_call',
-              content: `Calling ${toolCall.function.name}...`,
-              toolCall,
-              timestamp: new Date().toISOString(),
-            };
-            state.steps.push(callStep);
-            if (onStep) onStep(callStep);
-
-            // Execute tool
-            const toolResult = await this.executor.executeTool(
-              toolCall,
-              instance.projectId
-            );
-
-            // Add tool result step
-            const resultStep: RunStep = {
-              id: `step-${randomUUID()}`,
-              type: 'tool_result',
-              content: toolResult,
-              timestamp: new Date().toISOString(),
-            };
-            state.steps.push(resultStep);
-            if (onStep) onStep(resultStep);
-
-            // Add to messages for context
-            state.messages.push({
-              role: 'tool',
-              content: toolResult,
-              toolCallId: toolCall.id,
-            });
-
-            // Check for completion
-            if (toolCall.function.name === 'complete') {
-              state.status = 'completed';
-              
-              const completeStep: RunStep = {
-                id: `step-${randomUUID()}`,
-                type: 'completion',
-                content: toolResult,
-                timestamp: new Date().toISOString(),
-              };
-              state.steps.push(completeStep);
-              if (onStep) onStep(completeStep);
-
-              // Update run in database
-              await this.finalizeRun(state, instance);
-              return;
-            }
+            state.queuedToolCalls.push({ toolCall });
           }
 
-          // Continue loop - get next response from model
-          // In production, this would call the model again with tool results
-          // For now, we'll mark as completed after first iteration
+          await this.processQueuedToolCalls(state, instance, onStep);
+
+          const statusAfterQueue = state.status as AgentRunState['status'];
+          if (statusAfterQueue !== 'running') {
+            await this.finalizeRun(state, instance);
+            return;
+          }
+
+          // Continue loop - in a full Bud loop this would await next gateway event.
           state.status = 'completed';
           
         } else {
@@ -231,10 +197,139 @@ class AgentRunner {
       };
       state.steps.push(errorStep);
       if (onStep) onStep(errorStep);
+      this.publishRunEvent(state, instance, { kind: 'error', step: errorStep });
       state.status = 'error';
 
       await this.finalizeRun(state, instance);
     }
+  }
+
+
+  private async processQueuedToolCalls(
+    state: AgentRunState,
+    instance: AgentInstance,
+    onStep?: (step: RunStep) => void
+  ): Promise<void> {
+    if (state.processingQueue) {
+      return;
+    }
+
+    state.processingQueue = true;
+    try {
+      while (state.queuedToolCalls.length > 0) {
+        if (state.status === 'killed' || state.status === 'error') {
+          state.queuedToolCalls = [];
+          return;
+        }
+
+        if (state.status === 'paused') {
+          return;
+        }
+
+        const queued = state.queuedToolCalls.shift();
+        if (!queued) {
+          return;
+        }
+
+        const toolCall = queued.toolCall;
+        const toolCallPayload = {
+          type: 'tool_call',
+          id: toolCall.id,
+          tool: toolCall.function.name,
+          args: safeParseToolArgs(toolCall.function.arguments),
+        };
+        const validatedToolCall = parseToolCallMessage(toolCallPayload);
+        if (!validatedToolCall) {
+          const invalidStep: RunStep = {
+            id: `step-${randomUUID()}`,
+            type: 'error',
+            content: `Rejected invalid/disallowed tool call: ${toolCall.function.name}`,
+            timestamp: new Date().toISOString(),
+          };
+          state.steps.push(invalidStep);
+          onStep?.(invalidStep);
+          await audit.log({
+            id: randomUUID(),
+            projectId: instance.projectId,
+            actorType: 'agent',
+            actorId: instance.id,
+            actionType: 'OPENCLAW_TOOL_CALL_REJECTED',
+            payload: { tool: toolCall.function.name },
+            createdAt: new Date().toISOString(),
+          });
+          continue;
+        }
+
+        const callStep: RunStep = {
+          id: `step-${randomUUID()}`,
+          type: 'tool_call',
+          content: `Calling ${toolCall.function.name}...`,
+          toolCall,
+          timestamp: new Date().toISOString(),
+        };
+        state.steps.push(callStep);
+        onStep?.(callStep);
+        this.publishRunEvent(state, instance, { kind: 'tool_call', step: callStep });
+
+        const toolResult = await this.executor.executeTool(toolCall, instance.projectId);
+        const structuredResult = buildToolResultMessage({
+          id: validatedToolCall.id,
+          tool: validatedToolCall.tool,
+          success: !toolResult.startsWith('Error:'),
+          result: toolResult,
+        });
+
+        const resultStep: RunStep = {
+          id: `step-${randomUUID()}`,
+          type: 'tool_result',
+          content: typeof structuredResult.result === 'string' ? structuredResult.result : JSON.stringify(structuredResult.result),
+          timestamp: new Date().toISOString(),
+        };
+        state.steps.push(resultStep);
+        onStep?.(resultStep);
+        this.publishRunEvent(state, instance, { kind: 'tool_result', step: resultStep });
+
+        state.messages.push({ role: 'tool', content: toolResult, toolCallId: toolCall.id });
+
+        if (toolCall.function.name === 'complete') {
+          const completion = parseCompleteOrErrorMessage({ type: 'complete', summary: toolResult });
+          if (completion) {
+            state.status = 'completed';
+            const completeStep: RunStep = {
+              id: `step-${randomUUID()}`,
+              type: 'completion',
+              content: toolResult,
+              timestamp: new Date().toISOString(),
+            };
+            state.steps.push(completeStep);
+            onStep?.(completeStep);
+            this.publishRunEvent(state, instance, { kind: 'complete', step: completeStep });
+          }
+          return;
+        }
+      }
+    } finally {
+      state.processingQueue = false;
+    }
+  }
+
+
+  private publishRunEvent(
+    state: AgentRunState,
+    instance: AgentInstance,
+    payload: Record<string, unknown>
+  ): void {
+    const budSession = budSessionDb.getByRunId(state.runId);
+    if (!budSession) {
+      return;
+    }
+
+    wsServer.publishBudEvent(budSession.sessionId, {
+      runId: state.runId,
+      instanceId: instance.id,
+      timestamp: new Date().toISOString(),
+      ...payload,
+    });
   }
 
   /**
@@ -242,7 +337,7 @@ class AgentRunner {
    */
   private async finalizeRun(state: AgentRunState, instance: AgentInstance): Promise<void> {
     // Update instance
-    instance.status = state.status === 'completed' ? 'idle' : 'error';
+    instance.status = state.status === 'completed' ? 'idle' : (state.status === 'killed' ? 'paused' : 'error');
     instance.runId = undefined;
     instance.updatedAt = new Date().toISOString();
 
@@ -261,6 +356,18 @@ class AgentRunner {
       createdAt: new Date().toISOString(),
     });
 
+    const budSession = budSessionDb.getByRunId(state.runId);
+    if (budSession) {
+      const now = new Date().toISOString();
+      budSessionDb.upsert({
+        ...budSession,
+        status: state.status,
+        updatedAt: now,
+        lastSeenAt: now,
+      });
+      this.publishRunEvent(state, instance, { kind: 'status', status: state.status });
+    }
+
     console.log(`Agent run ${state.runId} completed with status: ${state.status}`);
   }
 
@@ -277,7 +384,7 @@ class AgentRunner {
   pauseRun(runId: string): boolean {
     const state = this.activeRuns.get(runId);
     if (!state || state.status !== 'running') return false;
-    
+
     state.status = 'paused';
     return true;
   }
@@ -288,8 +395,36 @@ class AgentRunner {
   resumeRun(runId: string): boolean {
     const state = this.activeRuns.get(runId);
     if (!state || state.status !== 'paused') return false;
-    
+
     state.status = 'running';
+    const instance = agentManager.getInstance(state.instanceId);
+    if (instance) {
+      void this.processQueuedToolCalls(state, instance, undefined);
+    }
+    return true;
+  }
+
+  async killRun(runId: string): Promise<boolean> {
+    const state = this.activeRuns.get(runId);
+    if (!state || (state.status !== 'running' && state.status !== 'paused')) return false;
+
+    state.status = 'killed';
+    state.queuedToolCalls = [];
+
+    const instance = agentManager.getInstance(state.instanceId);
+    if (instance) {
+      await audit.log({
+        id: randomUUID(),
+        projectId: instance.projectId,
+        actorType: 'user',
+        actorId: 'system',
+        actionType: 'AGENT_RUN_KILLED',
+        payload: { runId },
+        createdAt: new Date().toISOString(),
+      });
+      await this.finalizeRun(state, instance);
+    }
+
     return true;
   }
 
@@ -300,6 +435,18 @@ class AgentRunner {
     return Array.from(this.activeRuns.values())
       .filter(r => r.instanceId === instanceId)
       .sort((a, b) => new Date(b.steps[0]?.timestamp).getTime() - new Date(a.steps[0]?.timestamp).getTime());
+  }
+}
+
+function safeParseToolArgs(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return {};
+  } catch {
+    return {};
   }
 }
 

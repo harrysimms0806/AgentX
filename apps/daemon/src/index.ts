@@ -15,10 +15,11 @@ import { auth } from './auth';
 import { sandbox } from './sandbox';
 import { audit } from './audit';
 import { supervisor } from './supervisor';
-import { initDatabase, closeDatabase } from './database';
+import { initDatabase, closeDatabase, budSessionDb } from './database';
 import { terminalManager } from './terminal';
 import { wsServer } from './websocket';
 import { agentManager } from './agents';
+import { openclawAdapter } from './openclaw-adapter';
 import { authMiddleware } from './middleware/auth';
 import { healthRouter } from './routes/health';
 import { authPublicRouter, authProtectedRouter } from './routes/auth';
@@ -32,6 +33,9 @@ import { terminalsRouter } from './routes/terminals';
 import { agentsRouter } from './routes/agents';
 import { runsRouter } from './routes/runs';
 import { workflowsRouter } from './routes/workflows';
+import { openclawRouter } from './routes/openclaw';
+import { intelligenceRouter } from './routes/intelligence';
+import { pluginsRouter } from './routes/plugins';
 
 const app = express();
 
@@ -84,6 +88,9 @@ app.use('/terminals', authMiddleware, terminalsRouter);
 app.use('/agents', authMiddleware, agentsRouter);
 app.use('/runs', authMiddleware, runsRouter);
 app.use('/workflows', authMiddleware, workflowsRouter);
+app.use('/openclaw', authMiddleware, openclawRouter);
+app.use('/intelligence', authMiddleware, intelligenceRouter);
+app.use('/plugins', authMiddleware, pluginsRouter);
 
 // Error handler
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -113,11 +120,29 @@ async function main() {
   initDatabase();
   console.log('💾 SQLite persistence initialized');
 
+  // Cleanup expired Bud sessions every 10 minutes
+  setInterval(() => {
+    const cleaned = budSessionDb.cleanupExpired();
+    if (cleaned > 0) {
+      console.log(`🧹 Cleaned ${cleaned} expired Bud session(s)`);
+    }
+  }, 10 * 60 * 1000);
+
   // Initialize terminal manager (Phase 3)
   terminalManager.initialize();
 
   // Initialize agent manager (Phase 4)
   agentManager.initialize();
+
+  // Initialize OpenClaw gateway adapter (Phase 6.1)
+  openclawAdapter.initialize({
+    enabled: config.aiEngine === 'openclaw',
+    gatewayUrl: config.openclaw.gatewayUrl,
+    token: config.openclaw.token,
+    reconnectInitialDelayMs: config.openclaw.reconnectInitialDelayMs,
+    reconnectMaxDelayMs: config.openclaw.reconnectMaxDelayMs,
+    reconnectMultiplier: config.openclaw.reconnectMultiplier,
+  });
 
   // Write runtime config for UI discovery
   // Schema versioned for backward compatibility
@@ -161,6 +186,7 @@ main().catch((err) => {
 // Graceful shutdown handlers
 process.on('SIGINT', async () => {
   console.log('\n🛑 Received SIGINT, shutting down...');
+  openclawAdapter.stop();
   agentManager.shutdown();
   wsServer.shutdown();
   terminalManager.shutdown();
@@ -172,6 +198,7 @@ process.on('SIGINT', async () => {
 
 process.on('SIGTERM', async () => {
   console.log('\n🛑 Received SIGTERM, shutting down...');
+  openclawAdapter.stop();
   agentManager.shutdown();
   wsServer.shutdown();
   terminalManager.shutdown();

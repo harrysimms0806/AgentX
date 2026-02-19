@@ -1,133 +1,332 @@
 import { randomUUID } from 'crypto';
-import { execFileSync } from 'child_process';
-import fs from 'fs';
-import path from 'path';
+import { workflowDb } from './database';
+import { wsServer } from './websocket';
 
-export type WorkflowTemplate = {
+export type WorkflowStepType = 'spawn-agent' | 'spawn-bud' | 'handoff' | 'condition' | 'wait';
+
+export type WorkflowDefinitionStep = {
   id: string;
+  label: string;
+  type: WorkflowStepType;
+  requiresApproval?: boolean;
+  config?: Record<string, unknown>;
+};
+
+export type WorkflowDefinition = {
+  id: string;
+  projectId: string;
   name: string;
-  description: string;
-  allowedAgents: string[];
-  requiredApprovals: Array<'write_files' | 'run_commands' | 'git_commit'>;
-  steps: string[];
+  steps: WorkflowDefinitionStep[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WorkflowRunStep = {
+  id: string;
+  workflowStepId?: string;
+  order: number;
+  status: 'pending' | 'running' | 'paused' | 'succeeded' | 'failed';
+  requiresApproval: boolean;
+  approvedAt?: string;
+  outputJson?: string;
+  startedAt?: string;
+  endedAt?: string;
 };
 
 export type WorkflowRun = {
   id: string;
-  templateId: string;
+  workflowId: string;
   projectId: string;
-  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  status: 'queued' | 'running' | 'paused' | 'succeeded' | 'failed';
+  input?: Record<string, unknown>;
   createdAt: string;
   startedAt?: string;
   endedAt?: string;
-  checkpointBefore?: string;
-  checkpointAfter?: string;
-  steps: Array<{ id: string; label: string; status: 'pending' | 'running' | 'succeeded' | 'failed'; startedAt?: string; endedAt?: string }>;
+  steps: WorkflowRunStep[];
 };
 
-const templates: WorkflowTemplate[] = [
-  {
-    id: 'fix-failing-tests',
-    name: 'Fix failing tests',
-    description: 'Run tests, identify failures, apply fixes, and re-run tests.',
-    allowedAgents: ['agent-coder', 'agent-reviewer'],
-    requiredApprovals: ['write_files'],
-    steps: ['Plan approach', 'Run tests', 'Fix failing tests', 'Re-run tests', 'Summarize changes'],
-  },
-  {
-    id: 'refactor-safely',
-    name: 'Refactor safely',
-    description: 'Perform incremental refactor with checks between steps.',
-    allowedAgents: ['agent-coder', 'agent-architect'],
-    requiredApprovals: ['write_files', 'run_commands'],
-    steps: ['Plan refactor', 'Create checkpoint', 'Refactor target', 'Run validations', 'Summarize impact'],
-  },
-  {
-    id: 'implement-feature-from-spec',
-    name: 'Implement feature from spec',
-    description: 'Translate a spec into code changes and verification.',
-    allowedAgents: ['agent-coder', 'agent-architect', 'agent-reviewer'],
-    requiredApprovals: ['write_files', 'run_commands'],
-    steps: ['Parse specification', 'Create implementation plan', 'Implement feature', 'Run tests', 'Write summary'],
-  },
-];
-
-const runs = new Map<string, WorkflowRun>();
-
-function runGit(projectRoot: string, args: string[]): string {
-  return execFileSync('git', args, { cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
-}
-
-function isGitRepo(projectRoot: string): boolean {
-  try {
-    return runGit(projectRoot, ['rev-parse', '--is-inside-work-tree']).trim() === 'true';
-  } catch {
-    return false;
-  }
-}
-
-function createCheckpoint(projectRoot: string, workflowRunId: string, phase: 'before' | 'after'): string {
-  if (isGitRepo(projectRoot)) {
-    const tag = `agentx-${workflowRunId}-${phase}`;
-    runGit(projectRoot, ['tag', '-f', tag]);
-    return `git-tag:${tag}`;
-  }
-
-  const patchDir = path.join(projectRoot, '.agentx-checkpoints');
-  fs.mkdirSync(patchDir, { recursive: true });
-  const file = path.join(patchDir, `${workflowRunId}-${phase}.patch`);
-  fs.writeFileSync(file, 'Non-git checkpoint placeholder\n');
-  return `patch:${file}`;
-}
-
 class WorkflowManager {
-  listTemplates(): WorkflowTemplate[] {
-    return templates;
+  private activeRunIds = new Set<string>();
+
+  listWorkflows(projectId: string): WorkflowDefinition[] {
+    this.ensureDefaultWorkflows(projectId);
+    return workflowDb.listWorkflows(projectId).map(this.mapWorkflowRow);
   }
 
-  getRun(id: string): WorkflowRun | undefined {
-    return runs.get(id);
+  createWorkflow(input: { projectId: string; name: string; steps: Array<Omit<WorkflowDefinitionStep, 'id'>> }): WorkflowDefinition {
+    const now = new Date().toISOString();
+    const workflowId = `workflow-${randomUUID()}`;
+    const steps = input.steps.map((step, index) => ({
+      id: `workflow-step-${randomUUID()}`,
+      order: index,
+      stepJson: JSON.stringify({
+        id: `wstep-${index + 1}`,
+        label: step.label,
+        type: step.type,
+        requiresApproval: Boolean(step.requiresApproval),
+        config: step.config || {},
+      }),
+    }));
+
+    workflowDb.createWorkflow({
+      id: workflowId,
+      projectId: input.projectId,
+      name: input.name,
+      definitionJson: JSON.stringify({ version: 1 }),
+      createdAt: now,
+      updatedAt: now,
+      steps,
+    });
+
+    return this.getWorkflow(workflowId)!;
   }
 
-  listRuns(projectId: string): WorkflowRun[] {
-    return Array.from(runs.values()).filter((r) => r.projectId === projectId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  getWorkflow(workflowId: string): WorkflowDefinition | undefined {
+    const row = workflowDb.getWorkflow(workflowId);
+    if (!row) return undefined;
+    return this.mapWorkflowRow(row);
   }
 
-  startRun(templateId: string, projectId: string, projectRoot: string): WorkflowRun {
-    const template = templates.find((item) => item.id === templateId);
-    if (!template) throw new Error('Workflow template not found');
+  startRun(workflowId: string, projectId: string, input: Record<string, unknown> = {}): WorkflowRun {
+    const workflow = this.getWorkflow(workflowId);
+    if (!workflow) throw new Error('Workflow not found');
+    if (workflow.projectId !== projectId) throw new Error('Workflow/project mismatch');
 
-    const id = `workflow-${randomUUID()}`;
-    const run: WorkflowRun = {
-      id,
-      templateId,
+    const now = new Date().toISOString();
+    const runId = `workflow-run-${randomUUID()}`;
+    const runSteps = workflow.steps.map((step, index) => ({
+      id: `workflow-run-step-${randomUUID()}`,
+      workflowStepId: step.id,
+      order: index,
+      status: 'pending' as const,
+      requiresApproval: Boolean(step.requiresApproval),
+      outputJson: undefined,
+      approvedAt: undefined,
+      startedAt: undefined,
+      endedAt: undefined,
+    }));
+
+    workflowDb.createRun({
+      id: runId,
+      workflowId,
       projectId,
       status: 'queued',
-      createdAt: new Date().toISOString(),
-      steps: template.steps.map((label, index) => ({ id: `${id}-step-${index + 1}`, label, status: 'pending' })),
-    };
+      inputJson: JSON.stringify(input || {}),
+      createdAt: now,
+      steps: runSteps,
+    });
 
-    run.checkpointBefore = createCheckpoint(projectRoot, id, 'before');
-    runs.set(id, run);
-    this.executeRun(run, projectRoot);
+    const run = this.getRun(runId)!;
+    this.executeRun(run.id).catch(() => undefined);
     return run;
   }
 
-  private async executeRun(run: WorkflowRun, projectRoot: string) {
-    run.status = 'running';
-    run.startedAt = new Date().toISOString();
+  listRuns(projectId: string): WorkflowRun[] {
+    return workflowDb.listRuns(projectId).map(this.mapRunRow);
+  }
 
-    for (const step of run.steps) {
-      step.status = 'running';
-      step.startedAt = new Date().toISOString();
-      await new Promise((resolve) => setTimeout(resolve, 450));
-      step.status = 'succeeded';
-      step.endedAt = new Date().toISOString();
+  getRun(runId: string): WorkflowRun | undefined {
+    const row = workflowDb.getRun(runId);
+    return row ? this.mapRunRow(row) : undefined;
+  }
+
+  approveStep(runId: string, runStepId: string): WorkflowRun {
+    const run = this.getRun(runId);
+    if (!run) throw new Error('Run not found');
+
+    const step = run.steps.find((item) => item.id === runStepId);
+    if (!step) throw new Error('Run step not found');
+    if (!step.requiresApproval) throw new Error('Step does not require approval');
+
+    const now = new Date().toISOString();
+    workflowDb.updateRunStep(runStepId, {
+      approvedAt: now,
+      status: 'pending',
+      outputJson: JSON.stringify({ approved: true }),
+    });
+
+    const refreshed = this.getRun(runId)!;
+    if (refreshed.status === 'paused') {
+      workflowDb.updateRunStatus(runId, 'running');
+      this.executeRun(runId).catch(() => undefined);
     }
 
-    run.checkpointAfter = createCheckpoint(projectRoot, run.id, 'after');
-    run.status = 'succeeded';
-    run.endedAt = new Date().toISOString();
+    return this.getRun(runId)!;
+  }
+
+
+  private ensureDefaultWorkflows(projectId: string): void {
+    const existing = workflowDb.listWorkflows(projectId);
+    if (existing.length > 0) return;
+
+    const defaults: Array<{ name: string; steps: Array<Omit<WorkflowDefinitionStep, 'id'>> }> = [
+      {
+        name: 'Quick Bud handoff',
+        steps: [
+          { label: 'Spawn Bud', type: 'spawn-bud' },
+          { label: 'Review output', type: 'condition', config: { key: 'allowReview', equals: true }, requiresApproval: true },
+          { label: 'Wait for stabilization', type: 'wait', config: { ms: 500 } },
+        ],
+      },
+      {
+        name: 'Agent pipeline',
+        steps: [
+          { label: 'Spawn agent', type: 'spawn-agent' },
+          { label: 'Handoff review', type: 'handoff', requiresApproval: true },
+          { label: 'Final wait', type: 'wait', config: { ms: 300 } },
+        ],
+      },
+    ];
+
+    for (const workflow of defaults) {
+      this.createWorkflow({
+        projectId,
+        name: workflow.name,
+        steps: workflow.steps,
+      });
+    }
+  }
+
+  private async executeRun(runId: string): Promise<void> {
+    if (this.activeRunIds.has(runId)) return;
+    this.activeRunIds.add(runId);
+
+    try {
+      let run = this.getRun(runId);
+      if (!run) return;
+
+      if (run.status === 'queued') {
+        const now = new Date().toISOString();
+        workflowDb.updateRunStatus(run.id, 'running', now);
+        this.publishEvent(run.id, { kind: 'run_started' });
+      }
+
+      run = this.getRun(runId);
+      if (!run) return;
+
+      for (const step of run.steps) {
+        if (step.status === 'succeeded') continue;
+        if (step.status === 'failed') {
+          workflowDb.updateRunStatus(run.id, 'failed', undefined, new Date().toISOString());
+          this.publishEvent(run.id, { kind: 'run_failed', stepId: step.id });
+          return;
+        }
+
+        if (step.requiresApproval && !step.approvedAt) {
+          workflowDb.updateRunStep(step.id, { status: 'paused' });
+          workflowDb.updateRunStatus(run.id, 'paused');
+          this.publishEvent(run.id, { kind: 'approval_required', stepId: step.id });
+          return;
+        }
+
+        const startedAt = new Date().toISOString();
+        workflowDb.updateRunStep(step.id, { status: 'running', startedAt });
+        this.publishEvent(run.id, { kind: 'step_running', stepId: step.id });
+
+        const latestRun = this.getRun(run.id)!;
+        const workflow = this.getWorkflow(latestRun.workflowId)!;
+        const definitionStep = workflow.steps.find((item) => item.id === step.workflowStepId);
+
+        const execution = await this.executeStep(definitionStep, latestRun, step);
+        const endedAt = new Date().toISOString();
+
+        workflowDb.updateRunStep(step.id, {
+          status: execution.success ? 'succeeded' : 'failed',
+          outputJson: JSON.stringify(execution.output || {}),
+          endedAt,
+        });
+
+        this.publishEvent(run.id, {
+          kind: execution.success ? 'step_succeeded' : 'step_failed',
+          stepId: step.id,
+          output: execution.output || {},
+        });
+
+        if (!execution.success) {
+          workflowDb.updateRunStatus(run.id, 'failed', undefined, endedAt);
+          this.publishEvent(run.id, { kind: 'run_failed', stepId: step.id });
+          return;
+        }
+      }
+
+      workflowDb.updateRunStatus(run.id, 'succeeded', undefined, new Date().toISOString());
+      this.publishEvent(run.id, { kind: 'run_succeeded' });
+    } finally {
+      this.activeRunIds.delete(runId);
+    }
+  }
+
+  private async executeStep(
+    definitionStep: WorkflowDefinitionStep | undefined,
+    run: WorkflowRun,
+    step: WorkflowRunStep
+  ): Promise<{ success: boolean; output?: Record<string, unknown> }> {
+    const type = definitionStep?.type;
+
+    switch (type) {
+      case 'wait': {
+        const ms = Number(definitionStep?.config?.ms ?? 250);
+        await new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.min(ms, 10000))));
+        return { success: true, output: { waitedMs: ms } };
+      }
+      case 'condition': {
+        const key = String(definitionStep?.config?.key || '');
+        const equals = definitionStep?.config?.equals;
+        const actual = key ? run.input?.[key] : undefined;
+        return { success: actual === equals, output: { key, expected: equals, actual } };
+      }
+      case 'spawn-agent':
+      case 'spawn-bud':
+      case 'handoff':
+      default:
+        // Foundation behavior for Phase 7.1 core
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return { success: true, output: { type: type || 'noop', stepId: step.id } };
+    }
+  }
+
+  private publishEvent(runId: string, event: Record<string, unknown>): void {
+    wsServer.publishWorkflowEvent(runId, {
+      runId,
+      timestamp: new Date().toISOString(),
+      ...event,
+    });
+  }
+
+  private mapWorkflowRow(row: any): WorkflowDefinition {
+    const steps = (row.steps || []).map((stepRow: any, index: number) => {
+      const parsed = JSON.parse(stepRow.stepJson || '{}');
+      return {
+        id: stepRow.id,
+        label: String(parsed.label || `Step ${index + 1}`),
+        type: (parsed.type || 'wait') as WorkflowStepType,
+        requiresApproval: Boolean(parsed.requiresApproval),
+        config: parsed.config || {},
+      } satisfies WorkflowDefinitionStep;
+    });
+
+    return {
+      id: row.id,
+      projectId: row.projectId,
+      name: row.name,
+      steps,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  private mapRunRow(row: any): WorkflowRun {
+    return {
+      id: row.id,
+      workflowId: row.workflowId,
+      projectId: row.projectId,
+      status: row.status,
+      input: row.inputJson ? JSON.parse(row.inputJson) : {},
+      createdAt: row.createdAt,
+      startedAt: row.startedAt,
+      endedAt: row.endedAt,
+      steps: row.steps,
+    };
   }
 }
 

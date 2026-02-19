@@ -7,7 +7,7 @@ import { agentManager } from '../agents';
 import { agentRunner } from '../agent-runner';
 import { audit } from '../audit';
 import { projects } from '../store/projects';
-import { projectBriefDb } from '../database';
+import { budSessionDb, projectBriefDb } from '../database';
 import { renderInjectedContext } from '../context-pack';
 
 const router = Router();
@@ -148,15 +148,153 @@ router.post('/spawn', async (req, res) => {
       contextPackId
     );
 
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
+    const sessionId = randomUUID();
+
+    budSessionDb.upsert({
+      sessionId,
+      runId,
+      projectId,
+      status: 'running',
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      expiresAt,
+      lastKnownTask: prompt.slice(0, 300),
+      lastSeenAt: now.toISOString(),
+    });
+
     res.status(201).json({
       success: true,
       instance,
       runId,
+      sessionId,
       message: `Agent ${definitionId} spawned successfully`,
     });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to spawn agent', message: err.message });
   }
+});
+
+
+// GET /agents/sessions - List resumable Bud sessions
+router.get('/sessions', (req, res) => {
+  ensureInit();
+  const projectId = req.query.projectId as string | undefined;
+  const sessions = budSessionDb.list(projectId);
+  res.json({ sessions });
+});
+
+// POST /agents/sessions/:id/resume - Mark session as resumed and refresh expiry
+router.post('/sessions/:id/resume', (req, res) => {
+  ensureInit();
+  const existing = budSessionDb.getById(req.params.id);
+  if (!existing) {
+    res.status(404).json({ error: 'Session not found or expired' });
+    return;
+  }
+
+  const now = new Date();
+  budSessionDb.upsert({
+    ...existing,
+    status: existing.status === 'expired' ? 'expired' : 'running',
+    updatedAt: now.toISOString(),
+    lastSeenAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString(),
+  });
+
+  res.json({ success: true, session: budSessionDb.getById(existing.sessionId) });
+});
+
+// POST /agents/sessions/:id/start-new - Mark old session closed when user starts fresh
+router.post('/sessions/:id/start-new', (req, res) => {
+  ensureInit();
+  const existing = budSessionDb.getById(req.params.id);
+  if (!existing) {
+    res.status(404).json({ error: 'Session not found or expired' });
+    return;
+  }
+
+  const now = new Date().toISOString();
+  budSessionDb.upsert({
+    ...existing,
+    status: 'closed',
+    updatedAt: now,
+    lastSeenAt: now,
+  });
+
+  res.json({ success: true });
+});
+
+
+// POST /agents/spawn-bud - Spawn a Bud/OpenClaw session explicitly
+router.post('/spawn-bud', async (req, res) => {
+  ensureInit();
+  const { definitionId, projectId, prompt, contextPackId } = req.body;
+
+  if (!definitionId || !projectId || !prompt) {
+    res.status(400).json({ error: 'definitionId, projectId, and prompt are required' });
+    return;
+  }
+
+  try {
+    const result = await agentManager.spawn(definitionId, projectId, prompt, contextPackId);
+    const now = new Date();
+    const sessionId = randomUUID();
+
+    budSessionDb.upsert({
+      sessionId,
+      runId: result.runId,
+      projectId,
+      status: 'running',
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString(),
+      lastKnownTask: prompt.slice(0, 300),
+      lastSeenAt: now.toISOString(),
+    });
+
+    res.status(201).json({ success: true, sessionId, ...result });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to spawn Bud session', message: err.message });
+  }
+});
+
+// GET /agents/bud/:sessionId/status - Bud session status
+router.get('/bud/:sessionId/status', (req, res) => {
+  ensureInit();
+  const session = budSessionDb.getById(req.params.sessionId);
+  if (!session) {
+    res.status(404).json({ error: 'Session not found or expired' });
+    return;
+  }
+
+  const run = session.runId ? agentRunner.getRun(session.runId) : undefined;
+  res.json({ session, run });
+});
+
+// DELETE /agents/bud/:sessionId - kill Bud session
+router.delete('/bud/:sessionId', async (req, res) => {
+  ensureInit();
+  const session = budSessionDb.getById(req.params.sessionId);
+  if (!session) {
+    res.status(404).json({ error: 'Session not found or expired' });
+    return;
+  }
+
+  if (session.runId) {
+    await agentRunner.killRun(session.runId);
+  }
+
+  const now = new Date().toISOString();
+  budSessionDb.upsert({
+    ...session,
+    status: 'killed',
+    updatedAt: now,
+    lastSeenAt: now,
+  });
+
+  res.json({ success: true });
 });
 
 // POST /agents/context-pack/preview - Build context pack preview before send
@@ -390,6 +528,21 @@ router.post('/runs/:runId/resume', (req, res) => {
   }
 });
 
+
+// POST /agents/runs/:runId/kill - Kill an active agent run
+router.post('/runs/:runId/kill', async (req, res) => {
+  ensureInit();
+  const { runId } = req.params;
+
+  const success = await agentRunner.killRun(runId);
+  if (!success) {
+    res.status(400).json({ error: 'Run not found or not active' });
+    return;
+  }
+
+  res.json({ success: true, message: 'Run killed' });
+});
+
 // DELETE /agents/instances/:id - Stop/kill agent
 router.delete('/instances/:id', async (req, res) => {
   ensureInit();
@@ -400,6 +553,10 @@ router.delete('/instances/:id', async (req, res) => {
   if (!instance) {
     res.status(404).json({ error: 'Agent instance not found' });
     return;
+  }
+
+  if (instance.runId) {
+    await agentRunner.killRun(instance.runId);
   }
 
   // Update status

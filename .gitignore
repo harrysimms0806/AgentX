@@ -40,3 +40,6 @@ Thumbs.db
 
 # Legacy app bundle (archived externally)
 macOS/
+
+# Local AgentX runtime config (contains OpenClaw token)
+.agentx/config.json

@@ -8,6 +8,14 @@ export interface HealthResponse {
   daemonPort: number;
   uiPort: number;
   timestamp: string;
+  aiEngine: 'external' | 'openclaw';
+  openclaw: {
+    connected: boolean;
+    state: 'offline' | 'reconnecting' | 'connected';
+    gatewayUrl: string;
+    lastError: string | null;
+    connectedAt?: string;
+  };
 }
 
 export interface DiscoveryResponse {
@@ -35,6 +43,10 @@ export interface FileTreeResponse {
 export interface FileReadResponse {
   content: string;
   size: number;
+  startLine?: number;
+  endLine?: number;
+  totalLines?: number;
+  truncated?: boolean;
 }
 
 export interface GitStatusFile {
@@ -68,6 +80,9 @@ export interface StoredContextPack {
   id: string;
   createdAt: string;
   runId?: string;
+  sizeChars?: number;
+  budgetChars?: number;
+  truncated?: boolean;
   retrievalDebug?: ContextSnippet[];
 }
 
@@ -75,6 +90,19 @@ export interface ProjectBriefSnippet {
   id: string;
   snippet: ContextSnippet;
   pinnedAt: string;
+}
+
+
+export interface BudSessionRecord {
+  sessionId: string;
+  runId?: string;
+  projectId: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  lastKnownTask?: string;
+  lastSeenAt: string;
 }
 
 export interface RunRecord {
@@ -190,8 +218,13 @@ export async function getFileTree(projectId: string, dirPath: string, token: str
   return daemonRequest<FileTreeResponse>(`/fs/tree?${query}`, {}, token);
 }
 
-export async function readFile(projectId: string, filePath: string, token: string | null) {
-  const query = new URLSearchParams({ projectId, path: filePath }).toString();
+export async function readFile(projectId: string, filePath: string, token: string | null, range?: { startLine?: number; endLine?: number }) {
+  const query = new URLSearchParams({
+    projectId,
+    path: filePath,
+    ...(range?.startLine ? { startLine: String(range.startLine) } : {}),
+    ...(range?.endLine ? { endLine: String(range.endLine) } : {}),
+  }).toString();
   return daemonRequest<FileReadResponse>(`/fs/read?${query}`, {}, token);
 }
 
@@ -203,6 +236,62 @@ export async function getGitStatus(projectId: string, token: string | null) {
 export async function getGitDiff(projectId: string, token: string | null, filePath?: string) {
   const query = new URLSearchParams({ projectId, ...(filePath ? { path: filePath } : {}) }).toString();
   return daemonRequest<{ diff: string }>(`/git/diff?${query}`, {}, token);
+}
+
+
+
+export interface BudSessionStatusResponse {
+  session: BudSessionRecord;
+  run?: {
+    runId: string;
+    instanceId: string;
+    status: string;
+    iteration: number;
+    maxIterations: number;
+    steps: Array<{ id: string; type: string; content: string; timestamp: string }>;
+  };
+}
+
+export async function spawnBud(definitionId: string, projectId: string, prompt: string, token: string | null, contextPackId?: string) {
+  return daemonRequest<{ success: boolean; sessionId: string; runId: string; instance: { id: string } }>(`/agents/spawn-bud`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ definitionId, projectId, prompt, contextPackId }),
+  }, token);
+}
+
+export async function getBudSessionStatus(sessionId: string, token: string | null) {
+  return daemonRequest<BudSessionStatusResponse>(`/agents/bud/${sessionId}/status`, {}, token);
+}
+
+export async function killBudSession(sessionId: string, token: string | null) {
+  return daemonRequest<{ success: boolean }>(`/agents/bud/${sessionId}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+  }, token);
+}
+
+export async function getOpenClawStatus(token: string | null) {
+  return daemonRequest<{ aiEngine: 'external' | 'openclaw'; openclaw: { connected: boolean; state: string; gatewayUrl: string; lastError: string | null; connectedAt?: string } }>(`/openclaw/status`, {}, token);
+}
+
+export async function getBudSessions(projectId: string, token: string | null) {
+  const query = new URLSearchParams({ projectId }).toString();
+  return daemonRequest<{ sessions: BudSessionRecord[] }>(`/agents/sessions?${query}`, {}, token);
+}
+
+export async function resumeBudSession(sessionId: string, token: string | null) {
+  return daemonRequest<{ success: boolean; session: BudSessionRecord }>(`/agents/sessions/${sessionId}/resume`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  }, token);
+}
+
+export async function closeBudSession(sessionId: string, token: string | null) {
+  return daemonRequest<{ success: boolean }>(`/agents/sessions/${sessionId}/start-new`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  }, token);
 }
 
 export async function getRuns(projectId: string, token: string | null) {
@@ -275,35 +364,50 @@ export async function unpinProjectBriefSnippet(projectId: string, snippetId: str
 
 export interface WorkflowTemplate {
   id: string;
+  projectId: string;
   name: string;
-  description: string;
-  allowedAgents: string[];
-  requiredApprovals: Array<'write_files' | 'run_commands' | 'git_commit'>;
-  steps: string[];
+  steps: Array<{ id: string; label: string; type: 'spawn-agent' | 'spawn-bud' | 'handoff' | 'condition' | 'wait'; requiresApproval?: boolean }>;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface WorkflowRun {
   id: string;
-  templateId: string;
+  workflowId: string;
   projectId: string;
-  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  status: 'queued' | 'running' | 'paused' | 'succeeded' | 'failed';
   createdAt: string;
   startedAt?: string;
   endedAt?: string;
-  checkpointBefore?: string;
-  checkpointAfter?: string;
-  steps: Array<{ id: string; label: string; status: 'pending' | 'running' | 'succeeded' | 'failed'; startedAt?: string; endedAt?: string }>;
+  steps: Array<{ id: string; workflowStepId?: string; order: number; status: 'pending' | 'running' | 'paused' | 'succeeded' | 'failed'; requiresApproval: boolean; approvedAt?: string; startedAt?: string; endedAt?: string }>;
 }
 
-export async function getWorkflowTemplates(token: string | null) {
-  return daemonRequest<{ templates: WorkflowTemplate[] }>('/workflows/templates', {}, token);
+export async function getWorkflowTemplates(projectId: string, token: string | null) {
+  const query = new URLSearchParams({ projectId }).toString();
+  return daemonRequest<{ templates: WorkflowTemplate[] }>(`/workflows/templates?${query}`, {}, token);
 }
 
-export async function startWorkflowRun(projectId: string, templateId: string, token: string | null) {
+export async function createWorkflowTemplate(projectId: string, name: string, steps: Array<{ label: string; type: 'spawn-agent' | 'spawn-bud' | 'handoff' | 'condition' | 'wait'; requiresApproval?: boolean; config?: Record<string, unknown> }>, token: string | null) {
+  return daemonRequest<{ workflow: WorkflowTemplate }>(`/workflows/templates`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId, name, steps }),
+  }, token);
+}
+
+export async function startWorkflowRun(projectId: string, workflowId: string, token: string | null, input?: Record<string, unknown>) {
   return daemonRequest<{ run: WorkflowRun }>('/workflows/runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectId, templateId }),
+    body: JSON.stringify({ projectId, workflowId, input: input || {} }),
+  }, token);
+}
+
+export async function approveWorkflowStep(runId: string, runStepId: string, token: string | null) {
+  return daemonRequest<{ run: WorkflowRun }>(`/workflows/runs/${runId}/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ runStepId }),
   }, token);
 }
 
@@ -312,6 +416,20 @@ export async function getWorkflowRuns(projectId: string, token: string | null) {
   return daemonRequest<{ runs: WorkflowRun[] }>(`/workflows/runs?${query}`, {}, token);
 }
 
+
+
+export interface IntelligenceInsight {
+  id: string;
+  type: 'suggestion' | 'warning';
+  title: string;
+  detail: string;
+  blockable?: boolean;
+}
+
+export async function getIntelligenceInsights(projectId: string, token: string | null) {
+  const query = new URLSearchParams({ projectId }).toString();
+  return daemonRequest<{ insights: IntelligenceInsight[] }>(`/intelligence/insights?${query}`, {}, token);
+}
 
 export interface ObservabilityMetrics {
   runsPerDay: Array<{ day: string; count: number }>;
@@ -325,4 +443,44 @@ export interface ObservabilityMetrics {
 export async function getObservabilityMetrics(projectId: string | undefined, token: string | null) {
   const query = new URLSearchParams(projectId ? { projectId } : {}).toString();
   return daemonRequest<ObservabilityMetrics>(`/audit/metrics${query ? `?${query}` : ''}`, {}, token);
+}
+
+
+export interface PluginRecord {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  toolName: string;
+  status: 'pending' | 'active' | 'disabled';
+  requestedPermissions: string[];
+  approvedPermissions: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function getPlugins(token: string | null) {
+  return daemonRequest<{ plugins: PluginRecord[] }>(`/plugins`, {}, token);
+}
+
+export async function installSamplePlugin(token: string | null) {
+  return daemonRequest<{ plugin: PluginRecord }>(`/plugins/install-sample`, {
+    method: 'POST',
+  }, token);
+}
+
+export async function approvePlugin(pluginId: string, permissions: string[], token: string | null) {
+  return daemonRequest<{ plugin: PluginRecord }>(`/plugins/${pluginId}/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ permissions }),
+  }, token);
+}
+
+export async function invokePluginTool(toolName: string, args: Record<string, unknown>, token: string | null) {
+  return daemonRequest<{ result: unknown }>(`/plugins/tools/${toolName}/invoke`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ args }),
+  }, token);
 }
