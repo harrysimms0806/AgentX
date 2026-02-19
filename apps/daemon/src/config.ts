@@ -14,39 +14,58 @@ export interface Config {
   maxOutputBuffer: number;
   defaultTimeout: number;
   logRetention: number;
+  aiEngine: 'external' | 'openclaw';
+  openclaw: {
+    gatewayUrl: string;
+    token: string;
+    port: number;
+    reconnectInitialDelayMs: number;
+    reconnectMaxDelayMs: number;
+    reconnectMultiplier: number;
+  };
+}
+
+interface UserConfig {
+  ai?: {
+    engine?: 'external' | 'openclaw';
+  };
+  openclaw?: {
+    gatewayUrl?: string;
+    token?: string;
+    port?: number;
+    reconnectInitialDelayMs?: number;
+    reconnectMaxDelayMs?: number;
+    reconnectMultiplier?: number;
+  };
+}
+
+interface OpenClawFileConfig {
+  gatewayUrl: string;
+  token: string;
+  port: number;
 }
 
 // Config will be populated by initializeConfig()
 export let config: Config;
 
-/**
- * Check if a port is available by attempting to create a server
- */
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const server = net.createServer();
-    
-    server.once('error', (err: any) => {
-      if (err.code === 'EADDRINUSE') {
-        resolve(false); // Port is in use
-      } else {
-        resolve(false); // Other error, treat as unavailable
-      }
+
+    server.once('error', () => {
+      resolve(false);
     });
-    
+
     server.once('listening', () => {
       server.close(() => {
-        resolve(true); // Port is available
+        resolve(true);
       });
     });
-    
+
     server.listen(port, '127.0.0.1');
   });
 }
 
-/**
- * Find first available port in range [preferred, max]
- */
 async function findAvailablePort(preferred: number, max: number): Promise<number> {
   for (let port = preferred; port <= max; port++) {
     if (await isPortAvailable(port)) {
@@ -58,30 +77,32 @@ async function findAvailablePort(preferred: number, max: number): Promise<number
 }
 
 function resolveSandboxRoot(): string {
-  // Default to BUD BOT/projects for compatibility
   const defaultRoot = path.join(os.homedir(), 'BUD BOT', 'projects');
-  
-  // Allow override via env
   if (process.env.AGENTX_SANDBOX) {
     return path.resolve(process.env.AGENTX_SANDBOX);
   }
-  
   return defaultRoot;
 }
 
-/**
- * Initialize configuration with port discovery
- * Must be called before accessing config
- */
 export async function initializeConfig(): Promise<Config> {
   const runtimeDir = path.join(os.homedir(), '.agentx');
-  
+  const userConfig = loadUserConfig(runtimeDir);
+  const openclawFileConfig = loadOpenClawConfig();
+
   console.log('🔍 Discovering available ports...');
   const [port, uiPort] = await Promise.all([
     findAvailablePort(3001, 3010),
     findAvailablePort(3000, 3010),
   ]);
-  
+
+  const resolvedGatewayUrl =
+    sanitizeGatewayUrl(openclawFileConfig.gatewayUrl) ||
+    sanitizeGatewayUrl(userConfig.openclaw?.gatewayUrl) ||
+    'ws://127.0.0.1:18789';
+
+  const resolvedPort = openclawFileConfig.port || userConfig.openclaw?.port || 18789;
+  const resolvedToken = openclawFileConfig.token || userConfig.openclaw?.token || '';
+
   config = {
     port,
     uiPort,
@@ -89,21 +110,109 @@ export async function initializeConfig(): Promise<Config> {
     runtimeDir,
     databasePath: path.join(runtimeDir, 'daemon.db'),
     auditLogPath: path.join(runtimeDir, 'audit.jsonl'),
-    maxOutputBuffer: 10 * 1024 * 1024, // 10MB
-    defaultTimeout: 5 * 60 * 1000, // 5 minutes
-    logRetention: 7 * 24 * 60 * 60 * 1000, // 7 days
+    maxOutputBuffer: 10 * 1024 * 1024,
+    defaultTimeout: 5 * 60 * 1000,
+    logRetention: 7 * 24 * 60 * 60 * 1000,
+    aiEngine: userConfig.ai?.engine === 'openclaw' ? 'openclaw' : 'external',
+    openclaw: {
+      gatewayUrl: resolvedGatewayUrl,
+      token: resolvedToken,
+      port: resolvedPort,
+      reconnectInitialDelayMs: Math.max(250, userConfig.openclaw?.reconnectInitialDelayMs ?? 1000),
+      reconnectMaxDelayMs: Math.max(1000, userConfig.openclaw?.reconnectMaxDelayMs ?? 15000),
+      reconnectMultiplier: Math.max(1.1, userConfig.openclaw?.reconnectMultiplier ?? 1.8),
+    },
   };
-  
-  // Ensure runtime directory exists
+
   if (!fs.existsSync(config.runtimeDir)) {
     fs.mkdirSync(config.runtimeDir, { recursive: true });
   }
-  
+
+  persistAgentXConfig(runtimeDir, config, userConfig);
+
   console.log('Config loaded:', {
     port: config.port,
     uiPort: config.uiPort,
     sandboxRoot: config.sandboxRoot,
+    aiEngine: config.aiEngine,
+    openclawGateway: config.openclaw.gatewayUrl,
+    openclawPort: config.openclaw.port,
+    openclawTokenLoaded: Boolean(config.openclaw.token),
   });
-  
+
   return config;
+}
+
+function loadUserConfig(runtimeDir: string): UserConfig {
+  try {
+    const userConfigPath = path.join(runtimeDir, 'config.json');
+    if (!fs.existsSync(userConfigPath)) {
+      return {};
+    }
+
+    const raw = fs.readFileSync(userConfigPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? (parsed as UserConfig) : {};
+  } catch {
+    return {};
+  }
+}
+
+function loadOpenClawConfig(): OpenClawFileConfig {
+  try {
+    const configPath = path.join(os.homedir(), '.openclaw', 'openclaw.json');
+    const raw = fs.readFileSync(configPath, 'utf8');
+    const parsed = JSON.parse(raw) as any;
+
+    const port = Number(parsed?.gateway?.port);
+    const token = typeof parsed?.gateway?.auth?.token === 'string' ? parsed.gateway.auth.token.trim() : '';
+    const safePort = Number.isFinite(port) && port > 0 ? port : 18789;
+
+    return {
+      gatewayUrl: `ws://127.0.0.1:${safePort}`,
+      token,
+      port: safePort,
+    };
+  } catch {
+    return {
+      gatewayUrl: 'ws://127.0.0.1:18789',
+      token: '',
+      port: 18789,
+    };
+  }
+}
+
+function persistAgentXConfig(runtimeDir: string, loadedConfig: Config, previousConfig: UserConfig): void {
+  const configPath = path.join(runtimeDir, 'config.json');
+  const toStore: UserConfig = {
+    ...previousConfig,
+    ai: {
+      ...(previousConfig.ai || {}),
+      engine: loadedConfig.aiEngine,
+    },
+    openclaw: {
+      ...(previousConfig.openclaw || {}),
+      gatewayUrl: loadedConfig.openclaw.gatewayUrl,
+      token: loadedConfig.openclaw.token,
+      port: loadedConfig.openclaw.port,
+      reconnectInitialDelayMs: loadedConfig.openclaw.reconnectInitialDelayMs,
+      reconnectMaxDelayMs: loadedConfig.openclaw.reconnectMaxDelayMs,
+      reconnectMultiplier: loadedConfig.openclaw.reconnectMultiplier,
+    },
+  };
+
+  fs.writeFileSync(configPath, JSON.stringify(toStore, null, 2));
+}
+
+function sanitizeGatewayUrl(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  return trimmed.replace(/\0/g, '');
 }

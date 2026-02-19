@@ -2,6 +2,26 @@
 
 import { useDaemon } from '@/contexts/DaemonContext';
 
+function openclawBadge(health: ReturnType<typeof useDaemon>['health']) {
+  if (!health) {
+    return { label: 'OpenClaw unknown', className: 'warning' as const };
+  }
+
+  if (health.aiEngine !== 'openclaw') {
+    return { label: 'Engine: external', className: 'endpoint' as const };
+  }
+
+  if (health.openclaw.connected) {
+    return { label: 'OpenClaw connected', className: 'connected' as const };
+  }
+
+  if (health.openclaw.state === 'reconnecting') {
+    return { label: 'OpenClaw reconnecting', className: 'warning' as const };
+  }
+
+  return { label: 'OpenClaw offline', className: 'disconnected' as const };
+}
+
 function stateLabel(state: string) {
   switch (state) {
     case 'online':
@@ -39,7 +59,12 @@ export default function StatusBar() {
     daemonPort,
     daemonUrl,
     statusMessage,
+    resumableSession,
+    resumeSession,
+    startNewSession,
   } = useDaemon();
+
+  const clawStatus = openclawBadge(health);
 
   return (
     <footer className="status-bar">
@@ -57,6 +82,10 @@ export default function StatusBar() {
         <div className="status-item warning">
           <span>⚠ {safeModeLabel}</span>
         </div>
+
+        <div className={`status-item ${clawStatus.className}`}>
+          <span>{clawStatus.label}</span>
+        </div>
       </div>
 
       <div className="status-section">
@@ -72,10 +101,37 @@ export default function StatusBar() {
           </div>
         )}
 
+        {health?.aiEngine === 'openclaw' && (
+          <div className="status-item endpoint">
+            <span className="label">Gateway:</span>
+            <span className="value muted">{health.openclaw.gatewayUrl}</span>
+          </div>
+        )}
+
+        {health?.aiEngine === 'openclaw' && health.openclaw.lastError && (
+          <div className="status-item warning">
+            <span className="label">OpenClaw:</span>
+            <span className="value muted">{health.openclaw.lastError}</span>
+          </div>
+        )}
+
         {(daemonPort || health?.daemonPort) && (
           <div className="status-item">
             <span className="label">Port:</span>
             <span className="value">{daemonPort ?? health?.daemonPort}</span>
+          </div>
+        )}
+
+
+        {resumableSession && (
+          <div className="status-item warning">
+            <span>Resume session {resumableSession.sessionId.slice(0, 8)}?</span>
+            <button className="status-action" onClick={() => void resumeSession()}>
+              Resume
+            </button>
+            <button className="status-action" onClick={() => void startNewSession()}>
+              Start new
+            </button>
           </div>
         )}
 

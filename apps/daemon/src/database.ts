@@ -127,6 +127,93 @@ function createTables() {
     )
   `);
 
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS bud_sessions (
+      session_id TEXT PRIMARY KEY,
+      run_id TEXT,
+      project_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      last_known_task TEXT,
+      last_seen_at TEXT NOT NULL
+    )
+  `);
+
+
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS plugins (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      version TEXT NOT NULL,
+      description TEXT,
+      tool_name TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL,
+      requested_permissions_json TEXT NOT NULL,
+      approved_permissions_json TEXT NOT NULL,
+      source_code TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `);
+
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS workflows (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      definition_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS workflow_steps (
+      id TEXT PRIMARY KEY,
+      workflow_id TEXT NOT NULL,
+      step_order INTEGER NOT NULL,
+      step_json TEXT NOT NULL,
+      FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS workflow_runs (
+      id TEXT PRIMARY KEY,
+      workflow_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      input_json TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      ended_at TEXT,
+      FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS workflow_run_steps (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      workflow_step_id TEXT,
+      step_order INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      output_json TEXT,
+      requires_approval INTEGER NOT NULL DEFAULT 0,
+      approved_at TEXT,
+      started_at TEXT,
+      ended_at TEXT,
+      FOREIGN KEY (run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE
+    )
+  `);
+
   // Create indexes
   db.exec('CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)');
@@ -136,6 +223,26 @@ function createTables() {
   db.exec('CREATE INDEX IF NOT EXISTS idx_context_packs_run ON context_packs(run_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_project_policies_updated ON project_policies(updated_at)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_project_brief_project ON project_brief_snippets(project_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_bud_sessions_project ON bud_sessions(project_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_bud_sessions_expires ON bud_sessions(expires_at)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_workflows_project ON workflows(project_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_workflow_runs_project ON workflow_runs(project_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run ON workflow_run_steps(run_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_plugins_status ON plugins(status)');
+}
+
+
+export interface BudSessionRecord {
+  sessionId: string;
+  runId?: string;
+  projectId: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  lastKnownTask?: string;
+  lastSeenAt: string;
 }
 
 type StoredContextPack = {
@@ -570,3 +677,280 @@ export const policyDb = {
 };
 
 
+
+
+export const budSessionDb = {
+  upsert(session: BudSessionRecord): void {
+    const stmt = db!.prepare(`
+      INSERT INTO bud_sessions (
+        session_id, run_id, project_id, status, created_at, updated_at, expires_at, last_known_task, last_seen_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(session_id)
+      DO UPDATE SET
+        run_id = excluded.run_id,
+        status = excluded.status,
+        updated_at = excluded.updated_at,
+        expires_at = excluded.expires_at,
+        last_known_task = excluded.last_known_task,
+        last_seen_at = excluded.last_seen_at
+    `);
+
+    stmt.run(
+      session.sessionId,
+      session.runId || null,
+      session.projectId,
+      session.status,
+      session.createdAt,
+      session.updatedAt,
+      session.expiresAt,
+      session.lastKnownTask || null,
+      session.lastSeenAt,
+    );
+  },
+
+  list(projectId?: string): BudSessionRecord[] {
+    this.cleanupExpired();
+    const rows = projectId
+      ? db!.prepare('SELECT * FROM bud_sessions WHERE project_id = ? ORDER BY updated_at DESC').all(projectId)
+      : db!.prepare('SELECT * FROM bud_sessions ORDER BY updated_at DESC').all();
+    return (rows as any[]).map(mapBudSessionRow);
+  },
+
+  getById(sessionId: string): BudSessionRecord | undefined {
+    this.cleanupExpired();
+    const row = db!.prepare('SELECT * FROM bud_sessions WHERE session_id = ?').get(sessionId) as any;
+    return row ? mapBudSessionRow(row) : undefined;
+  },
+
+
+  getByRunId(runId: string): BudSessionRecord | undefined {
+    this.cleanupExpired();
+    const row = db!.prepare('SELECT * FROM bud_sessions WHERE run_id = ? ORDER BY updated_at DESC LIMIT 1').get(runId) as any;
+    return row ? mapBudSessionRow(row) : undefined;
+  },
+
+  cleanupExpired(): number {
+    const stmt = db!.prepare('DELETE FROM bud_sessions WHERE expires_at < ?');
+    const result = stmt.run(new Date().toISOString());
+    return result.changes;
+  },
+};
+
+function mapBudSessionRow(row: any): BudSessionRecord {
+  return {
+    sessionId: row.session_id,
+    runId: row.run_id || undefined,
+    projectId: row.project_id,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    expiresAt: row.expires_at,
+    lastKnownTask: row.last_known_task || undefined,
+    lastSeenAt: row.last_seen_at,
+  };
+}
+
+
+export const pluginDb = {
+  create(plugin: { id: string; name: string; version: string; description: string; toolName: string; status: string; requestedPermissions: string[]; approvedPermissions: string[]; sourceCode: string; createdAt: string; updatedAt: string }): void {
+    db!.prepare(`
+      INSERT INTO plugins (
+        id, name, version, description, tool_name, status, requested_permissions_json, approved_permissions_json, source_code, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      plugin.id,
+      plugin.name,
+      plugin.version,
+      plugin.description,
+      plugin.toolName,
+      plugin.status,
+      JSON.stringify(plugin.requestedPermissions),
+      JSON.stringify(plugin.approvedPermissions),
+      plugin.sourceCode,
+      plugin.createdAt,
+      plugin.updatedAt,
+    );
+  },
+
+  list(): Array<{ id: string; name: string; version: string; description: string; toolName: string; status: 'pending' | 'active' | 'disabled'; requestedPermissions: string[]; approvedPermissions: string[]; sourceCode: string; createdAt: string; updatedAt: string }> {
+    const rows = db!.prepare('SELECT * FROM plugins ORDER BY updated_at DESC').all() as any[];
+    return rows.map(mapPluginRow);
+  },
+
+  getById(pluginId: string): { id: string; name: string; version: string; description: string; toolName: string; status: 'pending' | 'active' | 'disabled'; requestedPermissions: string[]; approvedPermissions: string[]; sourceCode: string; createdAt: string; updatedAt: string } | undefined {
+    const row = db!.prepare('SELECT * FROM plugins WHERE id = ?').get(pluginId) as any;
+    return row ? mapPluginRow(row) : undefined;
+  },
+
+  getByToolName(toolName: string): { id: string; name: string; version: string; description: string; toolName: string; status: 'pending' | 'active' | 'disabled'; requestedPermissions: string[]; approvedPermissions: string[]; sourceCode: string; createdAt: string; updatedAt: string } | undefined {
+    const row = db!.prepare('SELECT * FROM plugins WHERE tool_name = ?').get(toolName) as any;
+    return row ? mapPluginRow(row) : undefined;
+  },
+
+  updateApproval(pluginId: string, approvedPermissions: string[], status: 'pending' | 'active' | 'disabled'): { id: string; name: string; version: string; description: string; toolName: string; status: 'pending' | 'active' | 'disabled'; requestedPermissions: string[]; approvedPermissions: string[]; sourceCode: string; createdAt: string; updatedAt: string } {
+    const now = new Date().toISOString();
+    db!.prepare('UPDATE plugins SET approved_permissions_json = ?, status = ?, updated_at = ? WHERE id = ?')
+      .run(JSON.stringify(approvedPermissions), status, now, pluginId);
+    const updated = this.getById(pluginId);
+    if (!updated) throw new Error('Plugin not found after update');
+    return updated;
+  },
+};
+
+function mapPluginRow(row: any) {
+  return {
+    id: row.id,
+    name: row.name,
+    version: row.version,
+    description: row.description || '',
+    toolName: row.tool_name,
+    status: row.status,
+    requestedPermissions: JSON.parse(row.requested_permissions_json || '[]'),
+    approvedPermissions: JSON.parse(row.approved_permissions_json || '[]'),
+    sourceCode: row.source_code,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+
+export const workflowDb = {
+  createWorkflow(input: { id: string; projectId: string; name: string; definitionJson: string; createdAt: string; updatedAt: string; steps: Array<{ id: string; order: number; stepJson: string }> }): void {
+    const workflowStmt = db!.prepare(`
+      INSERT INTO workflows (id, project_id, name, definition_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    const stepStmt = db!.prepare(`
+      INSERT INTO workflow_steps (id, workflow_id, step_order, step_json)
+      VALUES (?, ?, ?, ?)
+    `);
+
+    const tx = db!.transaction(() => {
+      workflowStmt.run(input.id, input.projectId, input.name, input.definitionJson, input.createdAt, input.updatedAt);
+      for (const step of input.steps) {
+        stepStmt.run(step.id, input.id, step.order, step.stepJson);
+      }
+    });
+    tx();
+  },
+
+  listWorkflows(projectId: string): Array<{ id: string; projectId: string; name: string; definitionJson: string; createdAt: string; updatedAt: string; steps: Array<{ id: string; order: number; stepJson: string }> }> {
+    const workflows = db!.prepare('SELECT * FROM workflows WHERE project_id = ? ORDER BY updated_at DESC').all(projectId) as any[];
+    const stepsStmt = db!.prepare('SELECT * FROM workflow_steps WHERE workflow_id = ? ORDER BY step_order ASC');
+
+    return workflows.map((row) => ({
+      id: row.id,
+      projectId: row.project_id,
+      name: row.name,
+      definitionJson: row.definition_json,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      steps: (stepsStmt.all(row.id) as any[]).map((s) => ({ id: s.id, order: s.step_order, stepJson: s.step_json })),
+    }));
+  },
+
+  getWorkflow(id: string): { id: string; projectId: string; name: string; definitionJson: string; createdAt: string; updatedAt: string; steps: Array<{ id: string; order: number; stepJson: string }> } | undefined {
+    const row = db!.prepare('SELECT * FROM workflows WHERE id = ?').get(id) as any;
+    if (!row) return undefined;
+    const steps = db!.prepare('SELECT * FROM workflow_steps WHERE workflow_id = ? ORDER BY step_order ASC').all(id) as any[];
+    return {
+      id: row.id,
+      projectId: row.project_id,
+      name: row.name,
+      definitionJson: row.definition_json,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      steps: steps.map((s) => ({ id: s.id, order: s.step_order, stepJson: s.step_json })),
+    };
+  },
+
+  createRun(run: { id: string; workflowId: string; projectId: string; status: string; inputJson: string; createdAt: string; startedAt?: string; endedAt?: string; steps: Array<{ id: string; workflowStepId?: string; order: number; status: string; outputJson?: string; requiresApproval: boolean; approvedAt?: string; startedAt?: string; endedAt?: string }> }): void {
+    const runStmt = db!.prepare(`
+      INSERT INTO workflow_runs (id, workflow_id, project_id, status, input_json, created_at, started_at, ended_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const runStepStmt = db!.prepare(`
+      INSERT INTO workflow_run_steps (id, run_id, workflow_step_id, step_order, status, output_json, requires_approval, approved_at, started_at, ended_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const tx = db!.transaction(() => {
+      runStmt.run(run.id, run.workflowId, run.projectId, run.status, run.inputJson, run.createdAt, run.startedAt || null, run.endedAt || null);
+      for (const step of run.steps) {
+        runStepStmt.run(step.id, run.id, step.workflowStepId || null, step.order, step.status, step.outputJson || null, step.requiresApproval ? 1 : 0, step.approvedAt || null, step.startedAt || null, step.endedAt || null);
+      }
+    });
+    tx();
+  },
+
+  updateRunStatus(runId: string, status: string, startedAt?: string, endedAt?: string): void {
+    db!.prepare('UPDATE workflow_runs SET status = ?, started_at = COALESCE(?, started_at), ended_at = COALESCE(?, ended_at) WHERE id = ?')
+      .run(status, startedAt || null, endedAt || null, runId);
+  },
+
+  updateRunStep(stepId: string, updates: { status?: string; outputJson?: string; approvedAt?: string; startedAt?: string; endedAt?: string }): void {
+    const fields: string[] = [];
+    const values: any[] = [];
+    if (updates.status !== undefined) { fields.push('status = ?'); values.push(updates.status); }
+    if (updates.outputJson !== undefined) { fields.push('output_json = ?'); values.push(updates.outputJson); }
+    if (updates.approvedAt !== undefined) { fields.push('approved_at = ?'); values.push(updates.approvedAt); }
+    if (updates.startedAt !== undefined) { fields.push('started_at = ?'); values.push(updates.startedAt); }
+    if (updates.endedAt !== undefined) { fields.push('ended_at = ?'); values.push(updates.endedAt); }
+    if (fields.length === 0) return;
+    values.push(stepId);
+    db!.prepare(`UPDATE workflow_run_steps SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  },
+
+  listRuns(projectId: string): any[] {
+    const runs = db!.prepare('SELECT * FROM workflow_runs WHERE project_id = ? ORDER BY created_at DESC').all(projectId) as any[];
+    const stepStmt = db!.prepare('SELECT * FROM workflow_run_steps WHERE run_id = ? ORDER BY step_order ASC');
+    return runs.map((r) => ({
+      id: r.id,
+      workflowId: r.workflow_id,
+      projectId: r.project_id,
+      status: r.status,
+      inputJson: r.input_json,
+      createdAt: r.created_at,
+      startedAt: r.started_at || undefined,
+      endedAt: r.ended_at || undefined,
+      steps: (stepStmt.all(r.id) as any[]).map((s) => ({
+        id: s.id,
+        workflowStepId: s.workflow_step_id || undefined,
+        order: s.step_order,
+        status: s.status,
+        outputJson: s.output_json || undefined,
+        requiresApproval: Boolean(s.requires_approval),
+        approvedAt: s.approved_at || undefined,
+        startedAt: s.started_at || undefined,
+        endedAt: s.ended_at || undefined,
+      })),
+    }));
+  },
+
+  getRun(runId: string): any | undefined {
+    const row = db!.prepare('SELECT * FROM workflow_runs WHERE id = ?').get(runId) as any;
+    if (!row) return undefined;
+    const steps = db!.prepare('SELECT * FROM workflow_run_steps WHERE run_id = ? ORDER BY step_order ASC').all(runId) as any[];
+    return {
+      id: row.id,
+      workflowId: row.workflow_id,
+      projectId: row.project_id,
+      status: row.status,
+      inputJson: row.input_json,
+      createdAt: row.created_at,
+      startedAt: row.started_at || undefined,
+      endedAt: row.ended_at || undefined,
+      steps: steps.map((s) => ({
+        id: s.id,
+        workflowStepId: s.workflow_step_id || undefined,
+        order: s.step_order,
+        status: s.status,
+        outputJson: s.output_json || undefined,
+        requiresApproval: Boolean(s.requires_approval),
+        approvedAt: s.approved_at || undefined,
+        startedAt: s.started_at || undefined,
+        endedAt: s.ended_at || undefined,
+      })),
+    };
+  },
+};

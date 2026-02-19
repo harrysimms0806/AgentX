@@ -9,6 +9,7 @@ import AgentList from '@/components/AgentList';
 const navItems = [
   { path: '/', label: 'Dashboard', icon: '◆' },
   { path: '/workspace', label: 'Workspace', icon: '◇' },
+  { path: '/workflows', label: 'Workflows', icon: '⛭' },
   { path: '/audit', label: 'Audit', icon: '◎' },
   { path: '/settings', label: 'Settings', icon: '⚙' },
 ];

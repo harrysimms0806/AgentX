@@ -16,6 +16,8 @@ interface WSClient {
   authenticated: boolean;
   clientId: string;
   onDataHandler?: (data: string) => void;
+  budSessionId?: string;
+  workflowRunId?: string;
 }
 
 const MAX_WS_BUFFERED_BYTES = 1024 * 1024; // 1MB per connection
@@ -137,6 +139,18 @@ class WebSocketServerManager {
         break;
       case 'terminal:clear':
         this.handleTerminalClear(client, message);
+        break;
+      case 'bud:subscribe':
+        this.handleBudSubscribe(client, message);
+        break;
+      case 'bud:unsubscribe':
+        this.handleBudUnsubscribe(client);
+        break;
+      case 'workflow:subscribe':
+        this.handleWorkflowSubscribe(client, message);
+        break;
+      case 'workflow:unsubscribe':
+        this.handleWorkflowUnsubscribe(client);
         break;
       default:
         this.send(client, {
@@ -397,6 +411,84 @@ class WebSocketServerManager {
       type: 'terminal:list',
       terminals,
     });
+  }
+
+
+  private handleBudSubscribe(client: WSClient, message: any): void {
+    const { sessionId } = message;
+    if (!sessionId || typeof sessionId !== 'string') {
+      this.send(client, {
+        type: 'bud:error',
+        code: 'SESSION_ID_REQUIRED',
+        error: 'sessionId required',
+      });
+      return;
+    }
+
+    client.budSessionId = sessionId;
+    this.send(client, {
+      type: 'bud:subscribed',
+      sessionId,
+    });
+  }
+
+  private handleBudUnsubscribe(client: WSClient): void {
+    const sessionId = client.budSessionId;
+    client.budSessionId = undefined;
+    this.send(client, {
+      type: 'bud:unsubscribed',
+      sessionId,
+    });
+  }
+
+  publishBudEvent(sessionId: string, event: Record<string, unknown>): void {
+    for (const client of this.clients.values()) {
+      if (client.budSessionId !== sessionId) continue;
+      this.send(client, {
+        type: 'bud:event',
+        sessionId,
+        event,
+      });
+    }
+  }
+
+
+  private handleWorkflowSubscribe(client: WSClient, message: any): void {
+    const { runId } = message;
+    if (!runId || typeof runId !== 'string') {
+      this.send(client, {
+        type: 'workflow:error',
+        code: 'RUN_ID_REQUIRED',
+        error: 'runId required',
+      });
+      return;
+    }
+
+    client.workflowRunId = runId;
+    this.send(client, {
+      type: 'workflow:subscribed',
+      runId,
+    });
+  }
+
+  private handleWorkflowUnsubscribe(client: WSClient): void {
+    const runId = client.workflowRunId;
+    client.workflowRunId = undefined;
+    this.send(client, {
+      type: 'workflow:unsubscribed',
+      runId,
+    });
+  }
+
+  publishWorkflowEvent(runId: string, event: Record<string, unknown>): void {
+    for (const client of this.clients.values()) {
+      if (client.workflowRunId !== runId) continue;
+      this.send(client, {
+        type: 'workflow:event',
+        runId,
+        event,
+      });
+    }
   }
 
   private handleDisconnect(client: WSClient): void {

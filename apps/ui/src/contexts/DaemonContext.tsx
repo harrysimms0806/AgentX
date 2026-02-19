@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { clearTerminal, createSessionToken, getDiscovery, getHealth, getTerminals, killTerminal, type HealthResponse } from '@/lib/daemon/client';
+import { clearTerminal, closeBudSession, createSessionToken, getBudSessions, getDiscovery, getHealth, getTerminals, killTerminal, resumeBudSession, type BudSessionRecord, type HealthResponse } from '@/lib/daemon/client';
 import { RETRY_CONFIG } from '@/lib/daemon/config';
 
 export type DaemonConnectionState =
@@ -34,6 +34,9 @@ interface DaemonContextType {
   retryAttempt: number;
   lastHealthAt: string | null;
   lastAuthAt: string | null;
+  resumableSession: BudSessionRecord | null;
+  resumeSession: () => Promise<void>;
+  startNewSession: () => Promise<void>;
 }
 
 const DaemonContext = createContext<DaemonContextType>({
@@ -56,6 +59,9 @@ const DaemonContext = createContext<DaemonContextType>({
   retryAttempt: 0,
   lastHealthAt: null,
   lastAuthAt: null,
+  resumableSession: null,
+  resumeSession: async () => {},
+  startNewSession: async () => {},
 });
 
 function getDelayMs(attempt: number) {
@@ -75,6 +81,8 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
   const [retryAttempt, setRetryAttempt] = useState(0);
   const [lastHealthAt, setLastHealthAt] = useState<string | null>(null);
   const [lastAuthAt, setLastAuthAt] = useState<string | null>(null);
+  const [resumableSession, setResumableSession] = useState<BudSessionRecord | null>(null);
+  const [resumePromptShown, setResumePromptShown] = useState(false);
   const terminalProjectScope = 'default';
 
   useEffect(() => {
@@ -174,6 +182,23 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
         })));
       }
 
+      const sessionsResult = await getBudSessions(terminalProjectScope, session.token);
+      if (sessionsResult.ok) {
+        const candidate = sessionsResult.data.sessions.find((item) => item.status === 'running');
+        setResumableSession(candidate || null);
+        if (candidate && !resumePromptShown) {
+          setResumePromptShown(true);
+          const shouldResume = window.confirm(`Resume session ${candidate.sessionId.slice(0, 8)} from ${new Date(candidate.lastSeenAt).toLocaleString()}?`);
+          if (shouldResume) {
+            const resumed = await resumeBudSession(candidate.sessionId, session.token);
+            if (resumed.ok) {
+              setResumableSession(resumed.data.session);
+              setStatusMessage(`Resumed session ${resumed.data.session.sessionId.slice(0, 8)}.`);
+            }
+          }
+        }
+      }
+
       scheduleRetry(1);
     };
 
@@ -188,6 +213,23 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
 
+
+
+  const resumeSession = async () => {
+    if (!token || !resumableSession) return;
+    const result = await resumeBudSession(resumableSession.sessionId, token);
+    if (result.ok) {
+      setResumableSession(result.data.session);
+      setStatusMessage(`Resumed session ${result.data.session.sessionId.slice(0, 8)}.`);
+    }
+  };
+
+  const startNewSession = async () => {
+    if (!token || !resumableSession) return;
+    await closeBudSession(resumableSession.sessionId, token);
+    setResumableSession(null);
+    setStatusMessage('Starting a new session. Previous session was closed.');
+  };
 
   const killTerminalSession = async (id: string) => {
     if (!token) return;
@@ -234,6 +276,9 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
       retryAttempt,
       lastHealthAt,
       lastAuthAt,
+      resumableSession,
+      resumeSession,
+      startNewSession,
     }),
     [
       connectionState,
@@ -246,8 +291,15 @@ export function DaemonProvider({ children }: { children: React.ReactNode }) {
       retryAttempt,
       lastHealthAt,
       lastAuthAt,
+      resumableSession,
+      resumeSession,
+      startNewSession,
       killTerminalSession,
       clearStaleTerminals,
+      resumableSession,
+      resumeSession,
+      startNewSession,
+      resumePromptShown,
     ]
   );
 

@@ -3,7 +3,8 @@ import { randomUUID } from 'crypto';
 import type { ContextPack } from './agents';
 import { retrieveMemorySnippets, type MemorySnippet } from './memory-retrieval';
 
-const DEFAULT_CONTEXT_BUDGET_CHARS = 12000;
+const DEFAULT_CONTEXT_BUDGET_CHARS = 100000;
+const HARD_CONTEXT_CAP_CHARS = 100000;
 const DEFAULT_MEMORY_SNIPPETS = 5;
 
 export interface ContextPackBuildInput {
@@ -50,7 +51,8 @@ export function renderInjectedContext(pack: ContextPack): string {
 }
 
 export function buildContextPack(input: ContextPackBuildInput): ContextPack {
-  const maxChars = input.maxChars ?? DEFAULT_CONTEXT_BUDGET_CHARS;
+  const requestedMaxChars = input.maxChars ?? DEFAULT_CONTEXT_BUDGET_CHARS;
+  const maxChars = Math.min(HARD_CONTEXT_CAP_CHARS, Math.max(5000, requestedMaxChars));
   const maxMemorySnippets = input.maxMemorySnippets ?? DEFAULT_MEMORY_SNIPPETS;
 
   const retrievalBudget = Math.floor(maxChars * 0.35);
@@ -71,7 +73,7 @@ export function buildContextPack(input: ContextPackBuildInput): ContextPack {
 
   const fileEntries = (input.openFiles ?? []).slice(0, 20).map((filePath) => ({
     path: filePath,
-    summary: `Opened by user (${path.extname(filePath) || 'file'})`,
+    summary: `Opened by user (${path.extname(filePath) || 'file'}). Content summarized in context; full file available on request via readFile(path,startLine,endLine).`,
   }));
 
   const notesMerged = [
@@ -123,4 +125,5 @@ export function buildContextPack(input: ContextPackBuildInput): ContextPack {
 export const contextPackConfig = {
   DEFAULT_CONTEXT_BUDGET_CHARS,
   DEFAULT_MEMORY_SNIPPETS,
+  HARD_CONTEXT_CAP_CHARS,
 };
