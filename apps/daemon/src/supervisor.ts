@@ -7,6 +7,7 @@ import { spawn as spawnPty, type IPty } from 'node-pty';
 import { EventEmitter } from 'events';
 import { Run } from '@agentx/api-types';
 import { openclawAdapter } from './openclaw-adapter';
+import { buildRunSummary } from './git-inspector';
 
 interface RunRecord extends Run {
   process?: ChildProcess;
@@ -841,7 +842,18 @@ class Supervisor extends EventEmitter {
       }
       run.exitCode = code ?? undefined;
       run.endedAt = new Date().toISOString();
-      run.summary = run.status === 'succeeded' ? 'Agent run completed successfully' : run.summary || 'Agent run failed';
+
+      if (run.status === 'succeeded') {
+        try {
+          const summary = buildRunSummary(cwd, prompt);
+          run.summary = JSON.stringify(summary);
+        } catch {
+          run.summary = 'Agent run completed successfully';
+        }
+      } else {
+        run.summary = run.summary || 'Agent run failed';
+      }
+
       run.logStream?.end();
       this.persistRuns();
       this.emit('run:status', this.toPublicRun(run));

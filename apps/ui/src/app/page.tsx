@@ -1,6 +1,8 @@
 'use client';
 
 import { useDaemon } from '@/contexts/DaemonContext';
+import { useEffect, useMemo, useState } from 'react';
+import { getObservabilityMetrics, getProjects, getWorkflowRuns, getWorkflowTemplates, startWorkflowRun, type ObservabilityMetrics, type WorkflowRun, type WorkflowTemplate } from '@/lib/daemon/client';
 
 function formatTimestamp(value: string | null) {
   if (!value) {
@@ -27,7 +29,58 @@ export default function Dashboard() {
     retryAttempt,
     lastHealthAt,
     lastAuthAt,
+    token,
   } = useDaemon();
+  const [projectId, setProjectId] = useState('');
+  const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
+  const [templates, setTemplates] = useState<WorkflowTemplate[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState('');
+  const [runs, setRuns] = useState<WorkflowRun[]>([]);
+  const [workflowStatus, setWorkflowStatus] = useState('');
+  const [metrics, setMetrics] = useState<ObservabilityMetrics | null>(null);
+
+  useEffect(() => {
+    if (!connected) return;
+    void (async () => {
+      const projectRes = await getProjects(token);
+      if (projectRes.ok) {
+        setProjects(projectRes.data);
+        if (projectRes.data[0]) setProjectId(projectRes.data[0].id);
+      }
+      const templateRes = await getWorkflowTemplates(token);
+      if (templateRes.ok) {
+        setTemplates(templateRes.data.templates);
+        if (templateRes.data.templates[0]) setSelectedTemplate(templateRes.data.templates[0].id);
+      }
+    })();
+  }, [connected, token]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    const load = async () => {
+      const [runRes, metricsRes] = await Promise.all([
+        getWorkflowRuns(projectId, token),
+        getObservabilityMetrics(projectId, token),
+      ]);
+      if (runRes.ok) setRuns(runRes.data.runs);
+      if (metricsRes.ok) setMetrics(metricsRes.data);
+    };
+    void load();
+    const timer = setInterval(() => void load(), 2500);
+    return () => clearInterval(timer);
+  }, [projectId, token]);
+
+  const latestRun = useMemo(() => runs[0], [runs]);
+
+  async function runWorkflow() {
+    if (!projectId || !selectedTemplate) return;
+    const res = await startWorkflowRun(projectId, selectedTemplate, token);
+    if (!res.ok) {
+      setWorkflowStatus(res.error.error);
+      return;
+    }
+    setWorkflowStatus(`Started ${res.data.run.id}`);
+  }
 
   return (
     <div className="dashboard">
@@ -136,6 +189,71 @@ export default function Dashboard() {
             <button className="action-btn">
               <span>◎</span> View Audit Log
             </button>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <span className="card-icon">⛭</span>
+            <h3>Workflows</h3>
+          </div>
+          <div className="card-body">
+            <div className="detail-row" style={{ marginBottom: '8px' }}>
+              <span className="label">Project:</span>
+              <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>{project.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="detail-row" style={{ marginBottom: '8px' }}>
+              <span className="label">Template:</span>
+              <select value={selectedTemplate} onChange={(e) => setSelectedTemplate(e.target.value)}>
+                {templates.map((template) => (
+                  <option key={template.id} value={template.id}>{template.name}</option>
+                ))}
+              </select>
+            </div>
+            <button className="action-btn primary" onClick={() => void runWorkflow()} disabled={!projectId || !selectedTemplate || !token}>
+              ▶ Run workflow
+            </button>
+            {workflowStatus ? <p className="message" style={{ marginTop: '8px' }}>{workflowStatus}</p> : null}
+            {latestRun ? (
+              <div style={{ marginTop: '10px', fontSize: '12px' }}>
+                <div><strong>Status:</strong> {latestRun.status}</div>
+                <div><strong>Before:</strong> {latestRun.checkpointBefore || 'n/a'}</div>
+                <div><strong>After:</strong> {latestRun.checkpointAfter || 'pending'}</div>
+                <div style={{ marginTop: '6px' }}>
+                  {latestRun.steps.map((step) => (
+                    <div key={step.id}>• {step.label} — {step.status}</div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <span className="card-icon">📈</span>
+            <h3>Observability</h3>
+          </div>
+          <div className="card-body">
+            <div className="detail-row"><span className="label">Runs/day points:</span><span>{metrics?.runsPerDay.length ?? 0}</span></div>
+            <div className="detail-row"><span className="label">Avg run duration:</span><span>{metrics ? `${metrics.avgRunDurationMs}ms` : 'n/a'}</span></div>
+            <div className="detail-row"><span className="label">Tool event types:</span><span>{metrics ? Object.keys(metrics.toolCallCounts).length : 0}</span></div>
+            <div style={{ marginTop: '8px', fontSize: '12px' }}>
+              <div><strong>Recent failure reasons</strong></div>
+              {(metrics?.failureReasons ?? []).slice(0, 3).map((item) => (
+                <div key={item.runId}>• {item.reason}</div>
+              ))}
+            </div>
+            <div style={{ marginTop: '8px', fontSize: '12px' }}>
+              <div><strong>Expensive runs</strong></div>
+              {(metrics?.expensiveRuns ?? []).slice(0, 3).map((item) => (
+                <div key={item.runId}>• {item.runId.slice(0, 8)}… {item.durationMs}ms</div>
+              ))}
+            </div>
           </div>
         </div>
 

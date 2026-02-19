@@ -5,8 +5,9 @@ import path from 'path';
 import { sandbox } from '../sandbox';
 import { audit } from '../audit';
 import { projects } from '../store/projects';
-import { lockDb } from '../database';
+import { lockDb, policyDb } from '../database';
 import { FileNode } from '@agentx/api-types';
+import { checkWritePathPolicy, defaultProjectPolicy } from '../policy-engine';
 
 const router = Router();
 
@@ -227,6 +228,13 @@ router.put('/write', (req, res) => {
     return;
   }
 
+  const policy = policyDb.getByProject(projectId) || defaultProjectPolicy;
+  const policyCheck = checkWritePathPolicy(policy, filePath);
+  if (!policyCheck.allowed) {
+    res.status(403).json({ error: `Policy blocked: ${policyCheck.reason}`, code: policyCheck.code, requestApproval: policyCheck.requestApproval });
+    return;
+  }
+
   const actorId = actorIdFromReq(req);
   const lockCheck = requireLock(projectId, filePath, actorId);
   if (!lockCheck.allowed) {
@@ -268,6 +276,13 @@ router.post('/delete', (req, res) => {
   const writeCheck = canWrite(projectId);
   if (!writeCheck.allowed) {
     res.status(403).json({ error: writeCheck.error || 'Delete not allowed', code: writeCheck.code });
+    return;
+  }
+
+  const deletePolicy = policyDb.getByProject(projectId) || defaultProjectPolicy;
+  const deletePolicyCheck = checkWritePathPolicy(deletePolicy, filePath);
+  if (!deletePolicyCheck.allowed) {
+    res.status(403).json({ error: `Policy blocked: ${deletePolicyCheck.reason}`, code: deletePolicyCheck.code, requestApproval: deletePolicyCheck.requestApproval });
     return;
   }
 

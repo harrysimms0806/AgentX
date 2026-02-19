@@ -3,13 +3,35 @@
 import { useEffect, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useDaemon } from '@/contexts/DaemonContext';
-import { getFileTree, getProjects, readFile, type FileTreeResponse } from '@/lib/daemon/client';
+import {
+  getFileTree,
+  getGitDiff,
+  getContextPacks,
+  getGitStatus,
+  getProjectBrief,
+  getProjects,
+  getRuns,
+  pinProjectBriefSnippet,
+  readFile,
+  unpinProjectBriefSnippet,
+  type FileTreeResponse,
+  type ContextSnippet,
+  type GitStatusFile,
+  type ProjectBriefSnippet,
+  type RunRecord,
+} from '@/lib/daemon/client';
 import type { FileNode } from '@agentx/api-types';
 
 const CodeEditor = dynamic(() => import('@/components/workspace/LazyCodeEditor'), {
   ssr: false,
   loading: () => <div style={{ padding: 16 }}>Loading editor…</div>,
 });
+
+type RunSummary = {
+  intent: string;
+  filesChanged: string[];
+  riskyAreas: string[];
+};
 
 export default function WorkspacePage() {
   const { token, connected } = useDaemon();
@@ -20,6 +42,13 @@ export default function WorkspacePage() {
   const [activeFile, setActiveFile] = useState<string>('');
   const [fileContent, setFileContent] = useState<string>('');
   const [status, setStatus] = useState<string>('');
+  const [reviewFiles, setReviewFiles] = useState<GitStatusFile[]>([]);
+  const [selectedReviewPath, setSelectedReviewPath] = useState<string>('');
+  const [reviewDiff, setReviewDiff] = useState<string>('');
+  const [runSummary, setRunSummary] = useState<RunSummary | null>(null);
+  const [activeRightTab, setActiveRightTab] = useState<'review' | 'context'>('review');
+  const [contextSnippets, setContextSnippets] = useState<ContextSnippet[]>([]);
+  const [projectBrief, setProjectBrief] = useState<ProjectBriefSnippet[]>([]);
 
   useEffect(() => {
     if (!token || !connected) return;
@@ -29,7 +58,7 @@ export default function WorkspacePage() {
       const res = await getProjects(token);
       if (!active) return;
       if (!res.ok) {
-        setStatus(res.error.error);
+        setStatus(formatApiError(res.error));
         return;
       }
 
@@ -48,15 +77,54 @@ export default function WorkspacePage() {
     if (!projectId || !token) return;
 
     void loadPath('.');
+    void loadReviewData(projectId, token);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, token]);
+
+  async function loadReviewData(targetProjectId: string, authToken: string) {
+    const [statusRes, runsRes, packsRes, briefRes] = await Promise.all([
+      getGitStatus(targetProjectId, authToken),
+      getRuns(targetProjectId, authToken),
+      getContextPacks(targetProjectId, authToken),
+      getProjectBrief(targetProjectId, authToken),
+    ]);
+
+    if (!statusRes.ok) {
+      setStatus(formatApiError(statusRes.error));
+      return;
+    }
+
+    setReviewFiles(statusRes.data.files);
+
+    const defaultPath = statusRes.data.files[0]?.path ?? '';
+    setSelectedReviewPath(defaultPath);
+
+    const diffRes = await getGitDiff(targetProjectId, authToken, defaultPath || undefined);
+    if (diffRes.ok) {
+      setReviewDiff(diffRes.data.diff || '(No diff for selected file)');
+    }
+
+    if (runsRes.ok) {
+      const latestSummary = extractLatestRunSummary(runsRes.data.runs);
+      setRunSummary(latestSummary);
+    }
+
+    if (packsRes.ok) {
+      const latestPack = packsRes.data.contextPacks[0];
+      setContextSnippets(latestPack?.retrievalDebug ?? []);
+    }
+
+    if (briefRes.ok) {
+      setProjectBrief(briefRes.data.snippets);
+    }
+  }
 
   async function loadPath(targetPath: string) {
     if (!token || !projectId || treeByPath[targetPath]) return;
 
     const res = await getFileTree(projectId, targetPath, token);
     if (!res.ok) {
-      setStatus(res.error.error);
+      setStatus(formatApiError(res.error));
       return;
     }
 
@@ -72,13 +140,59 @@ export default function WorkspacePage() {
 
     const res = await readFile(projectId, filePath, token);
     if (!res.ok) {
-      setStatus(res.error.error);
+      setStatus(formatApiError(res.error));
       return;
     }
 
     setActiveFile(filePath);
     setFileContent(res.data.content);
     setStatus(`Opened ${filePath}`);
+  }
+
+  async function selectReviewPath(filePath: string) {
+    if (!projectId || !token) return;
+    setSelectedReviewPath(filePath);
+
+    const diffRes = await getGitDiff(projectId, token, filePath);
+    if (!diffRes.ok) {
+      setStatus(formatApiError(diffRes.error));
+      return;
+    }
+
+    setReviewDiff(diffRes.data.diff || '(No diff for selected file)');
+  }
+
+  async function copyDiff() {
+    if (!reviewDiff) return;
+
+    try {
+      await navigator.clipboard.writeText(reviewDiff);
+      setStatus('Diff copied to clipboard');
+    } catch {
+      setStatus('Unable to copy diff in this browser session');
+    }
+  }
+
+
+  async function pinSnippet(snippet: ContextSnippet) {
+    if (!projectId || !token) return;
+    const res = await pinProjectBriefSnippet(projectId, snippet, token);
+    if (!res.ok) {
+      setStatus(formatApiError(res.error));
+      return;
+    }
+    const briefRes = await getProjectBrief(projectId, token);
+    if (briefRes.ok) setProjectBrief(briefRes.data.snippets);
+  }
+
+  async function unpinSnippet(snippetId: string) {
+    if (!projectId || !token) return;
+    const res = await unpinProjectBriefSnippet(projectId, snippetId, token);
+    if (!res.ok) {
+      setStatus(formatApiError(res.error));
+      return;
+    }
+    setProjectBrief((prev) => prev.filter((snippet) => snippet.id !== snippetId));
   }
 
   function toggleExpand(dirPath: string) {
@@ -94,8 +208,12 @@ export default function WorkspacePage() {
 
   const visibleRootNodes = useMemo(() => treeByPath['.'] ?? [], [treeByPath]);
 
+  function formatApiError(error: { error: string; requestApproval?: boolean }) {
+    return error.requestApproval ? `${error.error} — Request approval to continue.` : error.error;
+  }
+
   return (
-    <div style={{ height: 'calc(100vh - 64px)', display: 'grid', gridTemplateColumns: '320px 1fr' }}>
+    <div style={{ height: 'calc(100vh - 64px)', display: 'grid', gridTemplateColumns: '300px 1fr 420px' }}>
       <aside style={{ borderRight: '1px solid var(--border)', overflow: 'auto', padding: 12 }}>
         <h1 style={{ marginBottom: 12 }}>Workspace</h1>
         <label style={{ display: 'block', marginBottom: 12 }}>
@@ -108,6 +226,9 @@ export default function WorkspacePage() {
               setExpandedPaths(new Set(['.']));
               setActiveFile('');
               setFileContent('');
+              setReviewFiles([]);
+              setSelectedReviewPath('');
+              setReviewDiff('');
             }}
             style={{ width: '100%', marginTop: 4 }}
           >
@@ -134,7 +255,7 @@ export default function WorkspacePage() {
         </div>
       </aside>
 
-      <main style={{ height: '100%', minHeight: 0 }}>
+      <main style={{ height: '100%', minHeight: 0, borderRight: '1px solid var(--border)' }}>
         {activeFile ? (
           <CodeEditor path={activeFile} content={fileContent} onChange={setFileContent} readOnly={false} />
         ) : (
@@ -146,8 +267,120 @@ export default function WorkspacePage() {
           </div>
         ) : null}
       </main>
+
+      <section style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <div style={{ display: 'flex', borderBottom: '1px solid var(--border)' }}>
+          <button type="button" onClick={() => setActiveRightTab('review')} style={{ flex: 1, padding: '10px 12px', background: activeRightTab === 'review' ? 'var(--muted)' : 'transparent' }}>Review</button>
+          <button type="button" onClick={() => setActiveRightTab('context')} style={{ flex: 1, padding: '10px 12px', background: activeRightTab === 'context' ? 'var(--muted)' : 'transparent' }}>Context Pack</button>
+        </div>
+
+        {activeRightTab === 'review' ? (
+          <>
+            {runSummary ? (
+              <div style={{ borderBottom: '1px solid var(--border)', padding: 12, fontSize: 12 }}>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Latest Run Summary</div>
+                <div><strong>Intent:</strong> {runSummary.intent || '(not available)'}</div>
+                <div><strong>Files changed:</strong> {runSummary.filesChanged.length}</div>
+                <div><strong>Risky areas:</strong> {runSummary.riskyAreas.join(', ') || 'none'}</div>
+              </div>
+            ) : null}
+
+            <div style={{ borderBottom: '1px solid var(--border)', padding: 12 }}>
+              <div style={{ marginBottom: 8, fontWeight: 600 }}>Modified Files</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflow: 'auto' }}>
+                {reviewFiles.length === 0 ? (
+                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>No modified files.</span>
+                ) : (
+                  reviewFiles.map((file) => (
+                    <button
+                      key={file.path}
+                      onClick={() => void selectReviewPath(file.path)}
+                      style={{
+                        textAlign: 'left',
+                        border: '1px solid var(--border)',
+                        background: selectedReviewPath === file.path ? 'var(--muted)' : 'transparent',
+                        color: 'var(--text-primary)',
+                        borderRadius: 6,
+                        padding: '6px 8px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <div style={{ fontSize: 12 }}>{file.path}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                        {file.stagedStatus || '-'} / {file.unstagedStatus || '-'}
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, padding: 12, borderBottom: '1px solid var(--border)' }}>
+              <button type="button" onClick={() => void copyDiff()}>Copy Diff</button>
+              <button type="button" onClick={() => selectedReviewPath && void openFile(selectedReviewPath)} disabled={!selectedReviewPath}>
+                Open in Editor
+              </button>
+            </div>
+
+            <pre style={{ margin: 0, padding: 12, overflow: 'auto', fontSize: 11, flex: 1, background: '#0f172a', color: '#e2e8f0' }}>
+              {reviewDiff || 'Select a modified file to inspect diff.'}
+            </pre>
+          </>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
+            <div style={{ borderBottom: '1px solid var(--border)', padding: 12 }}>
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>Snippets (source-linked)</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 280, overflow: 'auto' }}>
+                {contextSnippets.length === 0 ? (
+                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>No context snippets available yet.</span>
+                ) : contextSnippets.map((snippet) => (
+                  <div key={snippet.id} style={{ border: '1px solid var(--border)', borderRadius: 6, padding: 8, fontSize: 12 }}>
+                    <div><strong>{snippet.sourceType}</strong> • {snippet.sourceRef}</div>
+                    <div style={{ color: 'var(--text-secondary)' }}>why included: {snippet.reason} • score: {snippet.score.toFixed(2)}</div>
+                    <div style={{ marginTop: 4 }}>{snippet.contentPreview || '(no preview)'}</div>
+                    <button type="button" onClick={() => void pinSnippet(snippet)} style={{ marginTop: 6 }}>Pin to Project Brief</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{ padding: 12, overflow: 'auto' }}>
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>Project Brief (pinned)</div>
+              {projectBrief.length === 0 ? (
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>No pinned snippets.</span>
+              ) : projectBrief.map((item) => (
+                <div key={item.id} style={{ border: '1px solid var(--border)', borderRadius: 6, padding: 8, marginBottom: 8, fontSize: 12 }}>
+                  <div><strong>{item.snippet.sourceType}</strong> • {item.snippet.sourceRef}</div>
+                  <div style={{ color: 'var(--text-secondary)' }}>pinned: {new Date(item.pinnedAt).toLocaleString()}</div>
+                  <div style={{ marginTop: 4 }}>{item.snippet.contentPreview || '(no preview)'}</div>
+                  <button type="button" onClick={() => void unpinSnippet(item.id)} style={{ marginTop: 6 }}>Unpin</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
     </div>
   );
+}
+
+function extractLatestRunSummary(runs: RunRecord[]): RunSummary | null {
+  const sorted = [...runs].sort((a, b) => {
+    return (new Date(b.endedAt || b.startedAt || 0).getTime() - new Date(a.endedAt || a.startedAt || 0).getTime());
+  });
+
+  for (const run of sorted) {
+    if (!run.summary) continue;
+    try {
+      const parsed = JSON.parse(run.summary) as RunSummary;
+      if (parsed && Array.isArray(parsed.filesChanged) && Array.isArray(parsed.riskyAreas)) {
+        return parsed;
+      }
+    } catch {
+      // Ignore legacy summaries.
+    }
+  }
+
+  return null;
 }
 
 function TreeNode({

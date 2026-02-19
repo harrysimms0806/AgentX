@@ -4,6 +4,8 @@ import { supervisor } from '../supervisor';
 import { audit } from '../audit';
 import { sandbox } from '../sandbox';
 import { projects } from '../store/projects';
+import { policyDb } from '../database';
+import { checkCommandPolicy, defaultProjectPolicy } from '../policy-engine';
 
 const router = Router();
 
@@ -57,6 +59,18 @@ router.post('/runs/:id/spawn', async (req, res) => {
 
   if (!project.settings.capabilities.EXEC_SHELL) {
     res.status(403).json({ error: 'EXEC_SHELL capability not enabled for this project' });
+    return;
+  }
+
+  const policy = policyDb.getByProject(run.projectId) || defaultProjectPolicy;
+  const commandString = [cmd, ...args].join(' ');
+  const policyCheck = checkCommandPolicy(policy, commandString);
+  if (!policyCheck.allowed) {
+    res.status(403).json({
+      error: `Policy blocked: ${policyCheck.reason}`,
+      code: policyCheck.code,
+      requestApproval: policyCheck.requestApproval,
+    });
     return;
   }
 

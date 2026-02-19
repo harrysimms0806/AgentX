@@ -6,6 +6,7 @@ import path from 'path';
 import os from 'os';
 import { randomUUID } from 'crypto';
 import type { Project, Run, AuditEvent, FileLock } from '@agentx/api-types';
+import type { ProjectPolicy } from './policy-engine';
 
 const DB_DIR = path.join(os.homedir(), '.agentx');
 const DB_PATH = path.join(DB_DIR, 'agentx.db');
@@ -87,6 +88,28 @@ function createTables() {
     )
   `);
 
+
+  // Project policies table (Epic 3)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS project_policies (
+      project_id TEXT PRIMARY KEY,
+      policy_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    )
+  `);
+
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS project_brief_snippets (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      snippet_json TEXT NOT NULL,
+      pinned_at TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    )
+  `);
+
   // Context packs table (Phase 5)
   db.exec(`
     CREATE TABLE IF NOT EXISTS context_packs (
@@ -111,6 +134,8 @@ function createTables() {
   db.exec('CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_events(created_at)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_context_packs_project ON context_packs(project_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_context_packs_run ON context_packs(run_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_project_policies_updated ON project_policies(updated_at)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_project_brief_project ON project_brief_snippets(project_id)');
 }
 
 type StoredContextPack = {
@@ -128,7 +153,7 @@ type StoredContextPack = {
   };
   sizeChars: number;
   retrievedSnippetIds?: string[];
-  retrievalDebug?: Array<{ id: string; source: string; score: number; matchedKeywords: string[]; updatedAt: string }>;
+  retrievalDebug?: Array<{ id: string; sourceType: 'file' | 'run' | 'chat'; sourceRef: string; score: number; reason: string; updatedAt: string; contentPreview?: string }>;
   truncated?: boolean;
   budgetChars?: number;
 };
@@ -487,6 +512,35 @@ export const contextPackDb = {
   },
 };
 
+
+export const projectBriefDb = {
+  list(projectId: string): Array<{ id: string; snippet: any; pinnedAt: string }> {
+    const stmt = db!.prepare('SELECT id, snippet_json, pinned_at FROM project_brief_snippets WHERE project_id = ? ORDER BY pinned_at DESC');
+    const rows = stmt.all(projectId) as any[];
+    return rows.map((row) => ({
+      id: row.id,
+      snippet: JSON.parse(row.snippet_json),
+      pinnedAt: row.pinned_at,
+    }));
+  },
+
+  upsert(projectId: string, id: string, snippet: Record<string, unknown>): void {
+    const stmt = db!.prepare(`
+      INSERT INTO project_brief_snippets (id, project_id, snippet_json, pinned_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(id)
+      DO UPDATE SET snippet_json = excluded.snippet_json, pinned_at = excluded.pinned_at
+    `);
+    stmt.run(id, projectId, JSON.stringify(snippet), new Date().toISOString());
+  },
+
+  remove(projectId: string, id: string): boolean {
+    const stmt = db!.prepare('DELETE FROM project_brief_snippets WHERE project_id = ? AND id = ?');
+    const result = stmt.run(projectId, id);
+    return result.changes > 0;
+  },
+};
+
 // Close database connection
 export function closeDatabase(): void {
   if (db) {
@@ -494,3 +548,25 @@ export function closeDatabase(): void {
     db = null;
   }
 }
+
+export const policyDb = {
+  getByProject(projectId: string): ProjectPolicy | undefined {
+    const stmt = db!.prepare('SELECT policy_json FROM project_policies WHERE project_id = ?');
+    const row = stmt.get(projectId) as any;
+    if (!row) return undefined;
+    return JSON.parse(row.policy_json);
+  },
+
+  upsert(projectId: string, policy: ProjectPolicy): void {
+    const stmt = db!.prepare(`
+      INSERT INTO project_policies (project_id, policy_json, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(project_id)
+      DO UPDATE SET policy_json = excluded.policy_json, updated_at = excluded.updated_at
+    `);
+
+    stmt.run(projectId, JSON.stringify(policy), new Date().toISOString());
+  },
+};
+
+
